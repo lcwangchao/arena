@@ -6,33 +6,29 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from arena.core.fork import combine_forkers, IterableForker, ForkContext, RecursionForkState, Forker
-from .column import Column
+from .column import TableColumnsForker, TableColumns
 from .util import AutoIDAllocator
 
 
 @dataclass(frozen=True)
-class TableColumnsEntity:
-    columns: typing.List[Column]
+class TemporaryTableType:
+    type: typing.Optional[str]
+    commit: typing.Optional[str]
 
-
-class TableColumns(Forker):
-    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+    @staticmethod
+    def forker() -> Forker:
         return IterableForker([
-            TableColumnsEntity(columns=[
-                Column.new(name='id', type='int'),
-                Column.new(name='v', type='varchar', len=16),
-            ]),
-            TableColumnsEntity(columns=[
-                Column.new(name='id', type='varchar', len=16),
-                Column.new(name='v', type='int', len=10)
-            ]),
-        ]).do_fork(ctx=ctx)
+            None,
+            TemporaryTableType('TEMPORARY', commit=None),
+            TemporaryTableType('GLOBAL TEMPORARY', commit='ON COMMIT DELETE ROWS')
+        ])
 
 
 class TableEntity:
-    def __init__(self, name: str, *, columns: TableColumnsEntity):
+    def __init__(self, name: str, *, columns: TableColumns, temp_type: TemporaryTableType):
         self._name = name
         self._columns = columns
+        self._temp_type = temp_type
 
     @property
     def name(self):
@@ -41,6 +37,10 @@ class TableEntity:
     @property
     def columns(self):
         return self._columns
+
+    @property
+    def temp_type(self):
+        return self._temp_type
 
     @property
     def sql_create(self):
@@ -55,9 +55,17 @@ class TableEntity:
             columns = [c.normalize() for c in columns]
 
         w = io.StringIO()
-        w.write(f'CREATE TABLE `{self.name}` (\n  ')
+        if self.temp_type:
+            w.write(f'CREATE {self.temp_type.type} TABLE')
+        else:
+            w.write('CREATE TABLE')
+
+        w.write(f' `{self.name}` (\n  ')
         w.write(',\n  '.join([c.stmt for c in columns]))
         w.write('\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin')
+        if self.temp_type and self.temp_type.commit:
+            w.write(' ')
+            w.write(self.temp_type.commit)
         return w.getvalue()
 
 
@@ -68,7 +76,8 @@ class Table(Forker):
         self._id = self._ID_ALLOCATOR.alloc()
         self._entity_idx = 0
         self._var = f'tb_{self._id}'
-        self._columns = TableColumns()
+        self._columns = TableColumnsForker()
+        self._temp_type = TemporaryTableType.forker()
 
     @property
     def name(self) -> Forker:
@@ -82,22 +91,26 @@ class Table(Forker):
         return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs))
 
     def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        return combine_forkers(self._columns)\
+        return combine_forkers(self._columns, self._temp_type)\
             .map(self._build_table_entity, update_ctx=self._update_table_ctx)\
             .do_fork(ctx=ctx)
 
     def _build_table_entity(self, _, items: typing.List):
         self._entity_idx += 1
         tbl_name = f'tbl_{self._id}_{self._entity_idx}'
+        temp_type = None
         columns = None
 
         for item in items:
-            if isinstance(item, TableColumnsEntity):
+            if isinstance(item, TableColumns):
                 columns = item
+            elif isinstance(item, TemporaryTableType):
+                temp_type = item
 
         return TableEntity(
             tbl_name,
-            columns=columns
+            columns=columns,
+            temp_type=temp_type,
         )
 
     def _update_table_ctx(self, ctx: ForkContext, entity: TableEntity):

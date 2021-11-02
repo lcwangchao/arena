@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import io
 import typing
+from collections import Iterator
 from dataclasses import dataclass
+
+from arena.core.fork import ForkContext, IterableForker, Forker
 
 
 @dataclass(frozen=True)
@@ -81,3 +84,22 @@ class Column:
             w.write(f' DEFAULT {self.default}')
 
         return w.getvalue()
+
+
+@dataclass(frozen=True)
+class TableColumns:
+    columns: typing.List[Column]
+
+
+class TableColumnsForker(Forker):
+    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+        return IterableForker([
+            TableColumns(columns=[
+                Column.new(name='id', type='int'),
+                Column.new(name='v', type='varchar', len=16),
+            ]),
+            TableColumns(columns=[
+                Column.new(name='id', type='varchar', len=16),
+                Column.new(name='v', type='int', len=10)
+            ]),
+        ]).do_fork(ctx=ctx)

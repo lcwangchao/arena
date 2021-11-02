@@ -82,6 +82,7 @@ class CaseEntity(unittest.TestCase):
                 self._case_func(TestKit(exec_iter=exec_iter))
                 for _ in exec_iter:
                     raise RuntimeError('should not reach here')
+                ctx.append_log('* SUCCESS *')
             except AssertionError as e:
                 ctx.append_log('* FAIL *')
                 args = list(e.args)
