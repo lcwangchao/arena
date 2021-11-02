@@ -74,7 +74,8 @@ class Query(RecursionForker):
         def _func(ectx: CaseExecContext):
             with ectx.conn.cursor() as cur:
                 full_sql = sql.format(*args)
-                ectx.append_log(f'[sql] {self._sql_for_print(full_sql)}')
+                log_msg = f'[sql] {self._sql_for_print(full_sql)}'
+                ectx.append_log(log_msg)
                 cur.execute(full_sql)
                 rows = cur.fetchall()
                 if self._rs:
