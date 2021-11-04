@@ -103,3 +103,6 @@ class TableColumnsForker(Forker):
                 Column.new(name='v', type='int', len=10)
             ]),
         ]).do_fork(ctx=ctx)
+
+    def __str__(self):
+        return "TableColumnsForker"

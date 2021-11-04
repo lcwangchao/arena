@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typing
 
-from arena.core.fork import Forker, ForkContext, RecursionForker, RecursionForkState, to_forker, combine_forkers
+from arena.core.fork import Forker, ForkContext, RecursionForker, to_forker, combine_forkers
 
 from .execute import Execute, CaseExecContext
 from .util import AutoIDAllocator
@@ -34,9 +34,12 @@ class ResultSet:
                 if not isinstance(col, Forker):
                     col = to_forker(col)
                 col_forkers.append(col)
-            row_forkers.append(combine_forkers(*col_forkers, rtype='tuple'))
+            row_forkers.append(combine_forkers(*col_forkers,
+                                               rtype='tuple',
+                                               desc=f'check row {[str(f) for f in col_forkers]}'))
 
-        forker = combine_forkers(*row_forkers)
+        forker = combine_forkers(*row_forkers,
+                                 desc=f'check rs {[str(r) for r in row_forkers]}')
 
         def _map(_, expected_rows):
             def _func(ectx: CaseExecContext):
@@ -57,9 +60,9 @@ class Query(RecursionForker):
     def __init__(self, *, sql, tk=None, args=None, rs=False):
         super().__init__(
             forkers=[to_forker(sql)] + ([to_forker(arg) for arg in args] if args else []),
-            build=self._build
+            build=self._build,
+            desc=f"SQL '{str(sql)}'"
         )
-        self._rs = rs
         self._id = self._ID_ALLOCATOR.alloc()
         self._rs = ResultSet(var=f'q_{self._id}_rs', tk=tk) if rs else None
 
@@ -67,9 +70,10 @@ class Query(RecursionForker):
     def rs(self):
         return self._rs
 
-    def _build(self, ctx: ForkContext, state: RecursionForkState) -> typing.Tuple[ForkContext, Execute]:
-        sql = state.entities[0]
-        args = state.entities[1:]
+    def _build(self, ctx: ForkContext) -> typing.Tuple[ForkContext, Execute]:
+        items = ctx.current_recursion.stack_items
+        sql = items[0]
+        args = items[1:]
 
         def _func(ectx: CaseExecContext):
             with ectx.conn.cursor() as cur:

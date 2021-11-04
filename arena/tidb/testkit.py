@@ -2,7 +2,7 @@ import typing
 import unittest
 from collections import Iterator
 
-from arena.core.fork import Forker, RecursionForker, ForkContext, RecursionForkState, to_forker
+from arena.core.fork import Forker, RecursionForker, ForkContext
 from arena.core.mysql import Database
 from .table import Table
 from .query import Query, ResultSet
@@ -21,7 +21,7 @@ class TestKit:
 
     def declare_table(self) -> Table:
         tbl = Table()
-        self.fork(tbl.map(self._empty_map))
+        self.fork(tbl.map(self._empty_map, desc=str(tbl)))
         return tbl
 
     def must_create_table(self) -> Table:
@@ -105,7 +105,7 @@ class Case(Forker):
     def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, CaseEntity]]:
         if not self._loaded:
             self.reload()
-        return RecursionForker(forkers=self._tk.forkers, build=self._build).do_fork(ctx=ctx)
+        return RecursionForker(forkers=self._tk.forkers, build=self._build, desc=str(self)).do_fork(ctx=ctx)
 
     @property
     def name(self):
@@ -126,5 +126,8 @@ class Case(Forker):
             suite.addTest(entity)
         return runner.run(suite)
 
-    def _build(self, ctx: ForkContext, state: RecursionForkState) -> typing.Tuple[ForkContext, CaseEntity]:
-        return ctx, CaseEntity(self.name, execs=state.entities, func=self._func, db=ctx.get_var("db"))
+    def _build(self, ctx: ForkContext) -> typing.Tuple[ForkContext, CaseEntity]:
+        return ctx, CaseEntity(self.name, execs=ctx.current_recursion.stack_items, func=self._func, db=ctx.get_var("db"))
+
+    def __str__(self):
+        return f"Case '{self.name}'"

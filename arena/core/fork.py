@@ -7,19 +7,122 @@ from typing import Any
 from collections import Iterator, Iterable
 
 
+class Stack:
+    def __init__(self):
+        self._prev = None
+        self._content = None
+        self._len = 0
+
+    def prev(self):
+        return self._prev
+
+    def peek(self):
+        return self._content
+
+    def push(self, content) -> Stack:
+        node = Stack()
+        node._prev = self
+        node._content = content
+        node._len = self._len + 1
+        return node
+
+    def pop(self) -> Stack:
+        if self._prev is None:
+            raise IndexError('pop from empty stack')
+
+        return self._prev
+
+    def iter_reverse(self):
+        cur = self
+        while cur._prev is not None:
+            yield cur._content
+            cur = cur._prev
+
+    def __str__(self):
+        return str([str(content) for content in self.items])
+
+    def __len__(self):
+        return self._len
+
+
+class RecursionState:
+    def __init__(self, forker: Forker, stack: Stack = None):
+        self._forker = forker
+        self._stack = stack or Stack()
+
+    def push_stack(self, entity) -> RecursionState:
+        return RecursionState(self._forker, self._stack.push(entity))
+
+    def pop_stack(self) -> RecursionState:
+        return RecursionState(self._forker, self._stack.pop())
+
+    def iter_stack_reverse(self):
+        return self._stack.iter_reverse()
+
+    @property
+    def stack_items(self):
+        items = list(self._stack.iter_reverse())
+        items.reverse()
+        return items
+
+    @property
+    def forker(self) -> Forker:
+        return self._forker
+
+    @property
+    def stack(self):
+        return self._stack
+
+    def __str__(self):
+        return str(self._forker)
+
+
 class ForkContext:
-    def __init__(self, *, variables: typing.Dict = None):
+    def __init__(self, *, variables: typing.Dict = None, recursions: Stack = None):
+        self._recursions = recursions or Stack()
         self._vars = variables.copy() if variables else {}
 
-    def new_context_with_vars(self, variables: typing.Dict) -> ForkContext:
+    @property
+    def vars(self):
+        return self._vars
+
+    def set_var(self, name, value) -> ForkContext:
         new_vars = self._vars.copy()
-        new_vars.update(variables)
-        return ForkContext(variables=new_vars)
+        new_vars[name] = value
+        return self._replace_vars(new_vars)
 
     def get_var(self, name: str, *, default=None):
         if name in self._vars:
             return self._vars[name]
         return default
+
+    @property
+    def recursions(self):
+        return self._recursions
+
+    def enter_recursion(self, forker: Forker) -> ForkContext:
+        return ForkContext(
+            variables=self._vars,
+            recursions=self.recursions.push(RecursionState(forker))
+        )
+
+    def exit_recursion(self) -> ForkContext:
+        return ForkContext(
+            variables=self._vars,
+            recursions=self.recursions.pop()
+        )
+
+    @property
+    def current_recursion(self) -> RecursionState:
+        return self._recursions.peek()
+
+    def push_stack(self, entity) -> ForkContext:
+        recursion = self.current_recursion.push_stack(entity)
+        recursions = self.recursions.pop()
+        return ForkContext(variables=self._vars, recursions=recursions.push(recursion))
+
+    def _replace_vars(self, variables: typing.Dict) -> ForkContext:
+        return ForkContext(variables=variables, recursions=self._recursions)
 
 
 class Forker(abc.ABC, Iterable[typing.Tuple[ForkContext, typing.Any]]):
@@ -42,58 +145,72 @@ class Forker(abc.ABC, Iterable[typing.Tuple[ForkContext, typing.Any]]):
 
 class MapForker(Forker):
     def __init__(self, forker: Forker, func: typing.Callable[[ForkContext, Any], Any], *,
-                 update_ctx: typing.Callable[[ForkContext, Any], ForkContext] = None):
+                 desc=None, update_ctx: typing.Callable[[ForkContext, Any], ForkContext] = None):
         self._forker = forker
         self._func = func
         self._update_ctx = update_ctx
+        self._desc = desc
 
-    def do_fork(self, *, ctx: ForkContext = None) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        def _map(args):
-            new_ctx = args[0]
-            entity = self._func(new_ctx, args[1])
+    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+        return self._do_fork(ctx=ctx)
+
+    def _do_fork(self, *, ctx: ForkContext):
+        for new_ctx, entity in self._forker.do_fork(ctx=ctx):
+            entity = self._func(new_ctx, entity)
             if self._update_ctx:
                 new_ctx = self._update_ctx(new_ctx, entity)
-            return new_ctx, entity
+            yield new_ctx, entity
 
-        return map(_map, self._forker.do_fork(ctx=ctx))
+    def __str__(self) -> str:
+        return self._desc or f'map{str(self._forker)}'
 
 
 class FlatMapForker(Forker):
     def __init__(self, forker: Forker, func: typing.Callable[[ForkContext, Any], Iterable], *,
-                 update_ctx: typing.Callable[[ForkContext, Any], ForkContext] = None):
+                 desc=None, update_ctx: typing.Callable[[ForkContext, Any], ForkContext] = None):
         self._forker = forker
         self._func = func
         self._update_ctx = update_ctx
+        self._desc = desc
 
-    def do_fork(self, *, ctx: ForkContext = None) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        def _generator():
-            for entity_ctx, entity in self._forker.do_fork(ctx=ctx):
-                for new_entity in self._func(entity_ctx, entity):
-                    new_ctx = entity_ctx
-                    if self._update_ctx:
-                        new_ctx = self._update_ctx(new_ctx, new_entity)
-                    yield new_ctx, new_entity
+    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+        return self._do_fork(ctx=ctx)
 
-        return _generator()
+    def _do_fork(self, *, ctx: ForkContext):
+        for entity_ctx, entity in self._forker.do_fork(ctx=ctx):
+            for new_entity in self._func(entity_ctx, entity):
+                new_ctx = entity_ctx
+                if self._update_ctx:
+                    new_ctx = self._update_ctx(new_ctx, new_entity)
+                yield new_ctx, new_entity
+
+    def __str__(self) -> str:
+        return self._desc or f'flatmap{str(self._forker)}'
 
 
 class FilterForker(Forker):
-    def __init__(self, forker: Forker, func: typing.Callable[[ForkContext, Any], bool]):
+    def __init__(self, forker: Forker, func: typing.Callable[[ForkContext, Any], bool], *,
+                 desc=None):
         self._forker = forker
         self._func = func
+        self._desc = desc
 
     def do_fork(self, *, ctx: ForkContext = None) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        def _filter(args):
-            return args[0], self._func(args[0], args[1])
+        return filter(
+            lambda new_ctx, entity: self._func(new_ctx, entity),
+            self._forker.do_fork(ctx=ctx)
+        )
 
-        return filter(_filter, self._forker.do_fork(ctx=ctx))
+    def __str__(self) -> str:
+        return self._desc or f'filter{str(self._forker)}'
 
 
 class IterableForker(Forker):
     def __init__(self, entities: Iterable, *,
-                 update_ctx: typing.Callable[[ForkContext, Any], ForkContext] = None):
+                 desc=None, update_ctx: typing.Callable[[ForkContext, Any], ForkContext] = None):
         self._entities = entities
         self._update_ctx = update_ctx
+        self._desc = desc
 
     def do_fork(self, *, ctx: ForkContext = None) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
         def _map(entity):
@@ -104,70 +221,59 @@ class IterableForker(Forker):
 
         return iter(map(_map, self._entities))
 
-
-class RecursionForkState:
-    def __init__(self, *, forkers):
-        self._forkers = forkers
-        self._entities = tuple()
-
-    @property
-    def forkers(self):
-        return self._forkers
-
-    @property
-    def entities(self):
-        return self._entities
-
-    def add_entity(self, entity) -> RecursionForkState:
-        state = RecursionForkState(forkers=self.forkers)
-        state._entities = self._entities + (entity,)
-        return state
+    def __str__(self) -> str:
+        return self._desc or f"[{', '.join([str(e) for e in self._entities])}]"
 
 
 class RecursionForker(Forker):
     def __init__(self, *, forkers: Iterable[Forker],
-                 build: typing.Callable[[ForkContext, RecursionForkState], typing.Tuple[ForkContext, Any]]):
+                 build: typing.Callable[[ForkContext], typing.Tuple[ForkContext, Any]],
+                 desc=None):
         self._forkers = list(forkers)
         self._build = build
+        self._desc = desc
 
     @property
     def forkers(self):
         return self._forkers
 
-    def do_fork(self, *, ctx: ForkContext = None) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
         forkers = self._forkers
         if not forkers:
             return iter(())
 
-        return self._do_fork(
-            ctx if ctx else ForkContext(),
-            RecursionForkState(forkers=forkers)
-        )
+        return self._do_fork(ctx.enter_recursion(self))
 
-    def _do_fork(self, ctx: ForkContext, state: RecursionForkState):
-        cur_forker = state.forkers[len(state.entities)]
+    def _do_fork(self, ctx: ForkContext):
+        cur_forker = self._forkers[len(ctx.current_recursion.stack)]
         for new_ctx, entity in cur_forker.do_fork(ctx=ctx):
-            new_state = state.add_entity(entity)
-            if len(new_state.entities) == len(new_state.forkers):
-                yield self._build(new_ctx, new_state)
+            new_ctx = new_ctx.push_stack(entity)
+            if len(new_ctx.current_recursion.stack) == len(self.forkers):
+                new_ctx, obj = self._build(new_ctx)
+                yield new_ctx.exit_recursion(), obj
             else:
-                yield from self._do_fork(new_ctx, new_state)
+                yield from self._do_fork(new_ctx)
+
+    def __str__(self) -> str:
+        return self._desc or f"Recursion[{', '.join([str(f) for f in self._forkers])}]"
 
 
 def to_forker(obj) -> Forker:
     if isinstance(obj, Forker):
         return obj
-    return IterableForker([obj])
+
+    return IterableForker([obj], desc=str(obj))
 
 
-def combine_forkers(*forkers, rtype='list') -> Forker:
-    def _build(ctx: ForkContext, state: RecursionForkState):
-        ret = state.entities
-        if rtype == 'list':
-            ret = list(ret)
+def combine_forkers(*forkers, rtype='list', desc=None) -> Forker:
+    def _build(ctx: ForkContext):
+        ret = ctx.current_recursion.stack_items
+        if rtype == 'tuple':
+            ret = tuple(ret)
         return ctx, ret
 
     return RecursionForker(
         forkers=forkers,
-        build=_build
+        build=_build,
+        desc=desc
     )

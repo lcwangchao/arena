@@ -5,7 +5,7 @@ import typing
 from dataclasses import dataclass
 from typing import Iterator
 
-from arena.core.fork import combine_forkers, IterableForker, ForkContext, RecursionForkState, Forker
+from arena.core.fork import RecursionForker, IterableForker, ForkContext, Forker
 from .column import TableColumnsForker, TableColumns
 from .util import AutoIDAllocator
 
@@ -21,7 +21,7 @@ class TemporaryTableType:
             None,
             TemporaryTableType('TEMPORARY', commit=None),
             TemporaryTableType('GLOBAL TEMPORARY', commit='ON COMMIT DELETE ROWS')
-        ])
+        ], desc="TemporaryTableType")
 
 
 class TableEntity:
@@ -81,44 +81,47 @@ class Table(Forker):
 
     @property
     def name(self) -> Forker:
-        return self._attr_for_forked_table(lambda _, tb: tb.name)
+        return self._attr_for_forked_table(lambda _, tb: tb.name, "name")
 
     @property
     def sql_create(self) -> Forker:
-        return self._attr_for_forked_table(lambda _, tb: tb.sql_create)
+        return self._attr_for_forked_table(lambda _, tb: tb.sql_create, "sql_create")
 
     def normalized_sql_create(self, *args, **kwargs):
-        return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs))
+        return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs), "normalized_sql_create")
 
     def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        return combine_forkers(self._columns, self._temp_type)\
-            .map(self._build_table_entity, update_ctx=self._update_table_ctx)\
-            .do_fork(ctx=ctx)
+        return RecursionForker(
+            forkers=[self._columns, self._temp_type],
+            build=self._build,
+            desc=str(self)
+        ).do_fork(ctx=ctx)
 
-    def _build_table_entity(self, _, items: typing.List):
+    def _build(self, ctx: ForkContext):
         self._entity_idx += 1
         tbl_name = f'tbl_{self._id}_{self._entity_idx}'
         temp_type = None
         columns = None
 
-        for item in items:
+        for item in ctx.current_recursion.iter_stack_reverse():
             if isinstance(item, TableColumns):
                 columns = item
             elif isinstance(item, TemporaryTableType):
                 temp_type = item
 
-        return TableEntity(
+        entity = TableEntity(
             tbl_name,
             columns=columns,
             temp_type=temp_type,
         )
+        return ctx.set_var(self._var, entity), entity
 
-    def _update_table_ctx(self, ctx: ForkContext, entity: TableEntity):
-        return ctx.new_context_with_vars({self._var: entity})
-
-    def _attr_for_forked_table(self, func) -> Forker:
+    def _attr_for_forked_table(self, func, func_name) -> Forker:
         def _map(ctx: ForkContext, _):
             forked = ctx.get_var(self._var)
             return func(ctx, forked)
 
-        return IterableForker([None]).map(_map)
+        return IterableForker([func_name]).map(_map, desc=f'{str(self)}.{func_name}')
+
+    def __str__(self):
+        return "Table"
