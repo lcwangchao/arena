@@ -54,7 +54,7 @@ class ResultSet:
         return self._tk.fork(forker.map(_map))
 
 
-class Query(RecursionForker):
+class QueryForker(RecursionForker):
     _ID_ALLOCATOR = AutoIDAllocator()
 
     def __init__(self, *, sql, tk=None, args=None, rs=False):

@@ -2,10 +2,10 @@ import typing
 import unittest
 from collections import Iterator
 
-from arena.core.fork import Forker, RecursionForker, ForkContext
+from arena.core.fork import Forker, RecursionForker, ForkContext, to_forker
 from arena.core.mysql import Database
-from .table import Table
-from .query import Query, ResultSet
+from .table import TableForker
+from .query import QueryForker, ResultSet
 from .execute import Execute, CaseExecContext
 
 
@@ -19,23 +19,41 @@ class TestKit:
             return next(self._exec_iter)()
         self._forkers.append(forker)
 
-    def declare_table(self) -> Table:
-        tbl = Table()
+    def declare_table(self, *args, **kwargs) -> TableForker:
+        tbl = TableForker(*args, **kwargs)
         self.fork(tbl.map(self._empty_map, desc=str(tbl)))
         return tbl
 
-    def must_create_table(self) -> Table:
-        tbl = self.declare_table()
+    def must_create_table(self, *args, **kwargs) -> TableForker:
+        tbl = self.declare_table(*args, **kwargs)
         self.must_exec(tbl.sql_create)
         return tbl
 
     def must_exec(self, sql, *args):
-        self.fork(Query(sql=sql, args=args))
+        self.fork(QueryForker(sql=sql, args=args))
 
     def must_query(self, sql, *args) -> ResultSet:
-        query = Query(sql=sql, args=args, rs=True, tk=self)
-        self.fork(query)
-        return query.rs
+        forker = QueryForker(sql=sql, args=args, rs=True, tk=self)
+        self.fork(forker)
+        return forker.rs
+
+    def print(self, msg, *args):
+        def _build(ctx: ForkContext) -> typing.Tuple[ForkContext, Execute]:
+            items = ctx.current_recursion.stack_items
+
+            def _func(ectx: CaseExecContext):
+                full_msg = items[0].format(*items[1:])
+                log_msg = f'[print] {full_msg}'
+                ectx.append_log(log_msg)
+                print(full_msg)
+
+            return ctx, Execute(_func)
+
+        self.fork(RecursionForker(
+            forkers=[to_forker(msg)] + ([to_forker(arg) for arg in args] if args else []),
+            build=_build,
+            desc=f"Print '{str(msg)}'"
+        ))
 
     @property
     def forkers(self) -> typing.List[Forker]:

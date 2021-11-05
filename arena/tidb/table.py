@@ -5,7 +5,7 @@ import typing
 from dataclasses import dataclass
 from typing import Iterator
 
-from arena.core.fork import RecursionForker, IterableForker, ForkContext, Forker
+from arena.core.fork import RecursionForker, IterableForker, ForkContext, Forker, RecursionEntityBuilder
 from .column import TableColumnsForker, TableColumns
 from .util import AutoIDAllocator
 
@@ -24,7 +24,7 @@ class TemporaryTableType:
         ], desc="TemporaryTableType")
 
 
-class TableEntity:
+class Table:
     def __init__(self, name: str, *, columns: TableColumns, temp_type: TemporaryTableType):
         self._name = name
         self._columns = columns
@@ -69,37 +69,24 @@ class TableEntity:
         return w.getvalue()
 
 
-class Table(Forker):
-    _ID_ALLOCATOR = AutoIDAllocator()
-
-    def __init__(self):
-        self._id = self._ID_ALLOCATOR.alloc()
-        self._entity_idx = 0
-        self._var = f'tb_{self._id}'
-        self._columns = TableColumnsForker()
-        self._temp_type = TemporaryTableType.forker()
+class TableBuilder(RecursionEntityBuilder):
+    def __init__(self, forker: TableForker):
+        self._point = 0
+        self._forker = forker
 
     @property
-    def name(self) -> Forker:
-        return self._attr_for_forked_table(lambda _, tb: tb.name, "name")
+    def point(self):
+        return self._point
 
-    @property
-    def sql_create(self) -> Forker:
-        return self._attr_for_forked_table(lambda _, tb: tb.sql_create, "sql_create")
+    def update(self, entity) -> RecursionEntityBuilder:
+        if not hasattr(entity, 'point'):
+            return self
 
-    def normalized_sql_create(self, *args, **kwargs):
-        return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs), "normalized_sql_create")
+        builder = TableBuilder(self._forker)
+        builder._point = self._point + entity.point
+        return builder
 
-    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        return RecursionForker(
-            forkers=[self._columns, self._temp_type],
-            build=self._build,
-            desc=str(self)
-        ).do_fork(ctx=ctx)
-
-    def _build(self, ctx: ForkContext):
-        self._entity_idx += 1
-        tbl_name = f'tbl_{self._id}_{self._entity_idx}'
+    def build(self, ctx: ForkContext) -> typing.Tuple[ForkContext, typing.Any]:
         temp_type = None
         columns = None
 
@@ -109,12 +96,54 @@ class Table(Forker):
             elif isinstance(item, TemporaryTableType):
                 temp_type = item
 
-        entity = TableEntity(
-            tbl_name,
+        entity = Table(
+            self._forker.next_tbl_name(),
             columns=columns,
             temp_type=temp_type,
         )
-        return ctx.set_var(self._var, entity), entity
+        return ctx.set_var(self._forker.entity_ctx_var, entity), entity
+
+
+class TableForker(Forker):
+    _ID_ALLOCATOR = AutoIDAllocator()
+
+    def __init__(self, *, name_prefix=None):
+        self._id = self._ID_ALLOCATOR.alloc()
+        self._name_prefix = name_prefix or f'tbl_{self._id}_'
+        self._entity_idx = 0
+        self._var = f'tb_{self._id}'
+        self._columns = TableColumnsForker()
+        self._temp_type = TemporaryTableType.forker()
+        self._invoked = False
+
+    @property
+    def name(self) -> Forker:
+        return self._attr_for_forked_table(lambda _, tb: tb.name, "name")
+
+    @property
+    def sql_create(self) -> Forker:
+        return self._attr_for_forked_table(lambda _, tb: tb.sql_create, "sql_create")
+
+    @property
+    def entity_ctx_var(self):
+        return self._var
+
+    def normalized_sql_create(self, *args, **kwargs):
+        return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs), "normalized_sql_create")
+
+    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+        if self._invoked:
+            raise RuntimeError('already invoked')
+
+        return RecursionForker(
+            forkers=[self._columns, self._temp_type],
+            builder=TableBuilder(self),
+            desc=str(self)
+        ).do_fork(ctx=ctx)
+
+    def next_tbl_name(self):
+        self._entity_idx += 1
+        return f'{self._name_prefix}{self._entity_idx}'
 
     def _attr_for_forked_table(self, func, func_name) -> Forker:
         def _map(ctx: ForkContext, _):
