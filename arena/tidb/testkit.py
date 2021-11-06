@@ -109,7 +109,7 @@ class CaseEntity(unittest.TestCase):
                 raise e
             except BaseException:
                 ctx.append_log('* FAIL *')
-                raise RuntimeError(f'\n\n{ctx.dump_detail()}\n')
+                raise AssertionError(f'Errors occurs when executing case. \n\n{ctx.dump_detail()}\n')
 
 
 class Case(Forker):

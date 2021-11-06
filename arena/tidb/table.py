@@ -61,6 +61,7 @@ class Table:
     def sql_create(self):
         return self._sql_create()
 
+    @property
     def normalized_sql_create(self):
         return self._sql_create(normalize=True)
 
@@ -138,23 +139,12 @@ class TableForker(Forker):
         self._invoked = False
 
     @property
-    def name(self) -> Forker:
-        return self._attr_for_forked_table(lambda _, tb: tb.name, "name")
-
-    @property
-    def sql_create(self) -> Forker:
-        return self._attr_for_forked_table(lambda _, tb: tb.sql_create, "sql_create")
-
-    @property
     def entity_ctx_var(self):
         return self._var
 
     @property
     def max_points(self):
         return self._max_points
-
-    def normalized_sql_create(self, *args, **kwargs):
-        return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs), "normalized_sql_create")
 
     def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
         if self._invoked:
@@ -170,12 +160,12 @@ class TableForker(Forker):
         self._entity_idx += 1
         return f'{self._name_prefix}{self._entity_idx}'
 
-    def _attr_for_forked_table(self, func, func_name) -> Forker:
-        def _map(ctx: ForkContext, _):
-            forked = ctx.get_var(self._var)
-            return func(ctx, forked)
+    def _get_ctx_entity_attr(self, ctx: ForkContext, item):
+        entity = ctx.get_var(self._var)
+        return getattr(entity, item)
 
-        return IterableForker([func_name]).map(_map, desc=f'{str(self)}.{func_name}')
+    def __getattr__(self, item):
+        return IterableForker([item]).map(self._get_ctx_entity_attr, desc=f'{str(self)}.{item}')
 
     def __str__(self):
         return "Table"
