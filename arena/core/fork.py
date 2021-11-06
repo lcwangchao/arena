@@ -68,7 +68,7 @@ class RecursionState:
         return self._forker
 
     @property
-    def builder(self) -> RecursionEntityBuilder:
+    def builder(self):
         return self._builder
 
     @property

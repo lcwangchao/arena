@@ -14,14 +14,29 @@ from .util import AutoIDAllocator
 class TemporaryTableType:
     type: typing.Optional[str]
     commit: typing.Optional[str]
+    points: int
 
-    @staticmethod
-    def forker() -> Forker:
-        return IterableForker([
-            None,
-            TemporaryTableType('TEMPORARY', commit=None),
-            TemporaryTableType('GLOBAL TEMPORARY', commit='ON COMMIT DELETE ROWS')
-        ], desc="TemporaryTableType")
+
+class TemporaryTableTypeForker(Forker):
+    TYPES = (
+        None,
+        TemporaryTableType('TEMPORARY', commit=None, points=1),
+        TemporaryTableType('GLOBAL TEMPORARY', commit='ON COMMIT DELETE ROWS', points=1)
+    )
+
+    def __init__(self, for_table=False):
+        self._for_table = for_table
+
+    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
+        tp_iter = map(lambda tp: (ctx, tp), iter(self.TYPES))
+        if not self._for_table:
+            return tp_iter
+
+        builder: TableBuilder = ctx.current_recursion.builder
+        if builder.max_points is None or builder.points < builder.max_points:
+            return tp_iter
+        else:
+            return iter([(ctx, None)])
 
 
 class Table:
@@ -71,19 +86,24 @@ class Table:
 
 class TableBuilder(RecursionEntityBuilder):
     def __init__(self, forker: TableForker):
-        self._point = 0
+        self._points = 0
+        self._max_points = forker.max_points
         self._forker = forker
 
     @property
-    def point(self):
-        return self._point
+    def points(self):
+        return self._points
+
+    @property
+    def max_points(self):
+        return self._max_points
 
     def update(self, entity) -> RecursionEntityBuilder:
-        if not hasattr(entity, 'point'):
+        if not hasattr(entity, 'points'):
             return self
 
         builder = TableBuilder(self._forker)
-        builder._point = self._point + entity.point
+        builder._points = self._points + entity.points
         return builder
 
     def build(self, ctx: ForkContext) -> typing.Tuple[ForkContext, typing.Any]:
@@ -107,13 +127,14 @@ class TableBuilder(RecursionEntityBuilder):
 class TableForker(Forker):
     _ID_ALLOCATOR = AutoIDAllocator()
 
-    def __init__(self, *, name_prefix=None):
+    def __init__(self, *, name_prefix=None, max_points=None):
         self._id = self._ID_ALLOCATOR.alloc()
         self._name_prefix = name_prefix or f'tbl_{self._id}_'
         self._entity_idx = 0
         self._var = f'tb_{self._id}'
         self._columns = TableColumnsForker()
-        self._temp_type = TemporaryTableType.forker()
+        self._temp_type = TemporaryTableTypeForker(for_table=True)
+        self._max_points = max_points
         self._invoked = False
 
     @property
@@ -127,6 +148,10 @@ class TableForker(Forker):
     @property
     def entity_ctx_var(self):
         return self._var
+
+    @property
+    def max_points(self):
+        return self._max_points
 
     def normalized_sql_create(self, *args, **kwargs):
         return self._attr_for_forked_table(lambda _, tb: tb.normalized_sql_create(*args, **kwargs), "normalized_sql_create")
