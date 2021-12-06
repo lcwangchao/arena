@@ -89,6 +89,11 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
         it = self.do_fork(context=ForkContext())
         return map(lambda item: item.value, it)
 
+    def concat(self, forker) -> Forker[T]:
+        if isinstance(self, ConcatForker):
+            return self.add_forker(forker)
+        return ConcatForker((self, forker))
+
     def transform_result(self, func) -> Forker[T]:
         if isinstance(self, TransformForker):
             return self.add_func(func)
@@ -114,7 +119,7 @@ class TransformForker(Forker[T]):
         self._name = name
 
     def add_func(self, func):
-        return TransformForker(self._forker, self._funcs + (func,))
+        return TransformForker(self._forker, self._funcs + (func,), name=self._name)
 
     def do_fork(self, *, context: ForkContext) -> ForkResult[T]:
         result = self._forker.do_fork(context=context)
@@ -138,7 +143,7 @@ class FlatForker(Forker[T]):
         return self._name or f'FlatForker({str(self._values)})'
 
 
-class ChainedForker(Forker[T]):
+class ConcatForker(Forker[T]):
     def __init__(self, forkers=None, *, name=None):
         self._forkers = forkers or tuple()
         self._name = name
@@ -147,8 +152,11 @@ class ChainedForker(Forker[T]):
         iters = map(lambda f: f.do_fork(context=context), self._forkers)
         return ForkResult(itertools.chain(*iters))
 
+    def add_forker(self, forker):
+        return ConcatForker(tuple(self._forkers) + (forker,), name=self._name)
+
     def __str__(self):
-        return self._name or f'ChainedForker({", ".join([str(forker) for forker in self._forkers])})'
+        return self._name or f'ConcatForker({", ".join([str(forker) for forker in self._forkers])})'
 
 
 class AssemblyBuilder(abc.ABC, Generic[T]):

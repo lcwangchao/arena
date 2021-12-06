@@ -55,17 +55,31 @@ class TestForker(unittest.TestCase):
         forker = FlatForker(values)
         self.assertListEqual(list(forker.do_fork(context=ctx)), list(ctx.new_fork_result(values)))
 
-    def test_chained_forker(self):
+    def test_concat_forker(self):
         ctx = ForkContext()
         values1 = ["a", "b", "c"]
         values2 = ["d", "e", "f"]
-        forker = ChainedForker([
+        values3 = ["g", "h", "i"]
+
+        forker = ConcatForker([
             FlatForker(values1),
             FlatForker(values2),
         ])
         self.assertListEqual(
             list(forker.do_fork(context=ctx)),
-            list(ctx.new_fork_result([*values1, *values2])),
+            list(ctx.new_fork_result(values1 + values2)),
+        )
+
+        forker = FlatForker(values1).concat(FlatForker(values2))
+        self.assertListEqual(
+            list(forker.do_fork(context=ctx)),
+            list(ctx.new_fork_result(values1 + values2)),
+        )
+
+        forker = forker.concat(FlatForker(values3))
+        self.assertListEqual(
+            list(forker.do_fork(context=ctx)),
+            list(ctx.new_fork_result(values1 + values2 + values3)),
         )
 
     def test_transform(self):
