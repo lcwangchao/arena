@@ -115,7 +115,7 @@ class TestForker(unittest.TestCase):
         self.assertIs(result[0].context, ctx2)
         self.assertIs(result[1].context, ctx)
         self.assertIs(result[2].context, ctx)
-        self.assertListEqual(list(forker.do_fork(context=ctx).to_values()), [2, 4, 5])
+        self.assertListEqual(forker.do_fork(context=ctx).collect_values(), [2, 4, 5])
 
     def test_map_values(self):
         ctx = ForkContext()
@@ -142,11 +142,11 @@ class TestForker(unittest.TestCase):
         )
 
 
-class TestAssemblyForker(unittest.TestCase):
-    def test_simple_assembly(self):
+class TestChainReactionForker(unittest.TestCase):
+    def test_simple_forkers(self):
         ctx = ForkContext()
-        forker = AssemblyForker(
-            children=[
+        forker = ChainForker(
+            forkers=[
                 FlatForker([1, 2]),
                 FlatForker([4, 5]),
                 FlatForker([6]),
@@ -165,18 +165,18 @@ class TestAssemblyForker(unittest.TestCase):
             (2, 5, 6, 8),
         ]
 
-        items = list(forker.do_fork(context=ctx))
+        items = list(ReactionForker(forker).do_fork(context=ctx))
         self.assertEqual(len(items), len(expected))
         for i, item in enumerate(items):
             self.assertIs(item.context, ctx)
             self.assertTupleEqual(item.value, expected[i])
 
-    def test_conditional_assembly(self):
+    def test_conditional_forkers(self):
         ctx = ForkContext()
-        forker = AssemblyForker(
-            children=[
+        forker = ChainForker(
+            forkers=[
                 FlatForker([1, 2]),
-                lambda b: FlatForker([3, 4]) if b.values[0] == 1 else FlatForker([5, 6, 7]),
+                lambda b: FlatForker([3, 4]) if b[0] == 1 else FlatForker([5, 6, 7]),
                 FlatForker([8])
             ]
         )
@@ -189,7 +189,7 @@ class TestAssemblyForker(unittest.TestCase):
             (2, 7, 8),
         ]
 
-        items = list(forker.do_fork(context=ctx))
+        items = list(ReactionForker(forker).do_fork(context=ctx))
         self.assertEqual(len(items), len(expected))
         for i, item in enumerate(items):
             self.assertIs(item.context, ctx)
@@ -200,7 +200,7 @@ class TestAssemblyForker(unittest.TestCase):
             def __init__(self, values):
                 self.values = values
 
-            def do_fork(self, *, context: ForkContext) -> ForkResult[T]:
+            def do_fork(self, context: ForkContext) -> ForkResult[int]:
                 fork_items = []
                 for v in self.values:
                     new_context = context.set_var(str(v), context.get_var(str(v), default=0) + 1)
@@ -211,8 +211,8 @@ class TestAssemblyForker(unittest.TestCase):
                 return 'MockForker'
 
         ctx = ForkContext()
-        forker = AssemblyForker(
-            children=[
+        forker = ChainForker(
+            forkers=[
                 _MockForker([1, 2]),
                 _MockForker([3, 4, 2]),
             ]
@@ -227,7 +227,7 @@ class TestAssemblyForker(unittest.TestCase):
             (2, 2),
         ]
 
-        items = list(forker.do_fork(context=ctx))
+        items = list(ReactionForker(forker).do_fork(context=ctx))
         self.assertEqual(len(items), len(expected))
         self.assertIsNone(ctx.get_var('1'))
         self.assertIsNone(ctx.get_var('2'))
