@@ -70,7 +70,7 @@ class TestKit(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def set_name(self, name, *args, **kwargs):
+    def set_fork_name(self, name, *args, **kwargs):
         pass
 
     def fork_value(self, value, **kwargs):
@@ -158,7 +158,7 @@ class BuilderTestKit(TestKit):
     def name(self):
         return self._name
 
-    def set_name(self, name, *args, **kwargs):
+    def set_fork_name(self, name, *args, **kwargs):
         if not isinstance(name, Forker):
             name = SingleValueForker(name)
         forker = ExecuteForker(name.format, args=args, kwargs=kwargs).map_value(lambda func: func())
@@ -191,7 +191,7 @@ class ExecuteTestKit(TestKit):
         finally:
             self._executing = False
 
-    def set_name(self, name, *args, **kwargs):
+    def set_fork_name(self, name, *args, **kwargs):
         pass
 
 
