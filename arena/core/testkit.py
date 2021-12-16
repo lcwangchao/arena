@@ -11,7 +11,6 @@ from arena.core.fork2 import *
 _ARG_STUB = object()
 _LOCAL = threading.local()
 
-
 __all__ = ['testkit', 'fork_test', 'fork_exec', 'ArgsForker', 'TestKit']
 
 
@@ -51,19 +50,19 @@ class ArgsForker(Forker):
     @classmethod
     def _value_forker(cls, value):
         return DefaultValueForker(value, default=cls._NONE) \
-            if isinstance(value, Forker) else SingleValueForker(_ARG_STUB)
+            if isinstance(value, Forker) else SingleValueForker(value)
 
     @classmethod
     def _key_value_forker(cls, item):
         key, value = item
         if isinstance(value, Forker):
             return DefaultValueForker(value, default=cls._NONE).map_value(lambda v: (key, v))
-        return SingleValueForker((key, _ARG_STUB))
+        return SingleValueForker((key, value))
 
 
 class TestKit(abc.ABC):
     @abc.abstractmethod
-    def add_forker(self, forker, *, record=True, record_prefix='tk_'):
+    def fork(self, forker, *, record=True, record_prefix='tk_'):
         pass
 
     @abc.abstractmethod
@@ -71,7 +70,13 @@ class TestKit(abc.ABC):
         pass
 
     def fork_range(self, start, end, **kwargs):
-        return self.add_forker(RangeForker(start, end, **kwargs))
+        return self.fork(RangeForker(start, end, **kwargs))
+
+    def fork_enum(self, *enum, **kwargs):
+        return self.fork(FlatForker(enum, **kwargs))
+
+    def fork_bool(self, **kwargs):
+        return self.fork_enum(True, False, **kwargs)
 
 
 def testkit() -> TestKit:
@@ -107,6 +112,8 @@ class ExecuteForker(Forker[Execute]):
     def do_fork(self, context: ForkContext) -> ForkResult[Execute]:
         def _map(v):
             func, (args, kwargs) = v
+            args = (arg if isinstance(arg, Forker) else _ARG_STUB for arg in args)
+            kwargs = {k: (v if isinstance(v, Forker) else _ARG_STUB) for k, v in kwargs.items()}
             return Execute(func, args=args, kwargs=kwargs)
 
         seed = ChainForker([
@@ -124,7 +131,7 @@ class BuilderTestKit(TestKit):
     def forkers(self):
         return self._forkers
 
-    def add_forker(self, forker, *, record=True, record_prefix='tk_'):
+    def fork(self, forker, *, record=True, record_prefix='tk_'):
         record_key = None
         if record:
             record_key, forker = forker.record(key_prefix=record_prefix)
@@ -136,7 +143,10 @@ class BuilderTestKit(TestKit):
             return None
 
     def execute(self, func, *args, **kwargs):
-        self.add_forker(ExecuteForker(func, args=args, kwargs=kwargs), record=False)
+        if hasattr(func, '_inner_func'):
+            func = getattr(func, '_inner_func')
+
+        self.fork(ExecuteForker(func, args=args, kwargs=kwargs), record=False)
         return _ARG_STUB
 
 
@@ -145,9 +155,9 @@ class ExecuteTestKit(TestKit):
         self._actions = actions
         self._executing = False
 
-    def add_forker(self, forker, *, record=True, record_prefix='tk_'):
+    def fork(self, forker, *, record=True, record_prefix='tk_'):
         if self._executing:
-            raise RuntimeError("Cannot call add_forker in execute")
+            raise RuntimeError("Cannot call fork in execute")
 
         return next(self._actions)
 
@@ -175,6 +185,7 @@ class CaseProxy:
             def _call(*args, **kwargs):
                 return self._tk.execute(value, *args, **kwargs)
 
+            setattr(_call, '_inner_func', value)
             return _call
         return value
 
@@ -194,7 +205,11 @@ class CaseExecutor:
         self._actions = actions
         self._extend_unittest = extend_unittest
 
-    def run(self, case):
+    def run(self, case: unittest.TestCase, **params):
+        with case.subTest(**params):
+            self._run(case)
+
+    def _run(self, case):
         if not self._actions:
             return
 
@@ -243,8 +258,11 @@ def fork_test(func=None, *, fork_asserts=False):
         @functools.wraps(_func)
         def _test_func(self):
             forker = CaseExecutorForker(self, _func, extend_unittest=_extend_unittest)
+            i = 0
             for case in forker:
-                case.run(self)
+                i += 1
+                case.run(self, i=i)
+
         return _test_func
 
     if func:

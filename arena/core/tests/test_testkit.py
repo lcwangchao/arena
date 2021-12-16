@@ -1,8 +1,8 @@
 from collections import OrderedDict
 import unittest
 
-from ..fork2 import *
-from ..testkit import *
+from arena.core.fork2 import *
+from arena.core.testkit import *
 
 
 class TestArgsForker(unittest.TestCase):
@@ -61,11 +61,14 @@ def add_func(a, b):
 
 
 class ForkTestDemo(unittest.TestCase):
+    def setUp(self) -> None:
+        self.print = False
+
     @fork_test
     def test_add_func1(self):
         tk = testkit()
-        a = tk.fork_range(0, 10)
-        b = tk.fork_range(0, 10)
+        a = tk.fork(RangeForker(0, 10))
+        b = tk.fork(RangeForker(0, 10))
         tk.execute(self.check_add_func, a, b)
 
     @fork_test
@@ -78,8 +81,8 @@ class ForkTestDemo(unittest.TestCase):
     @fork_test(fork_asserts=True)
     def test_add_func3(self):
         tk = testkit()
-        a = tk.fork_range(0, 10)
-        b = tk.fork_range(0, 10)
+        a = tk.fork_enum(1, 3, 5)
+        b = tk.fork_enum(2, 4, 6)
         self.assertEqual(self.add_func(a, b),  a + b)
         self.check_add_func(a, b)
 
@@ -91,7 +94,10 @@ class ForkTestDemo(unittest.TestCase):
 
     @fork_exec
     def check_add_func(self, a, b):
-        self.assertEqual(add_func(a, b), a + b)
+        expected = a + b
+        self.assertEqual(add_func(a, b), expected)
+        if self.print:
+            print(f'{a} + {b} = {expected}')
 
     @fork_exec
     def add_func(self, a, b):
