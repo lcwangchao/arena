@@ -69,6 +69,7 @@ class ForkTestDemo(unittest.TestCase):
         tk = testkit()
         a = tk.fork(RangeForker(0, 10))
         b = tk.fork(RangeForker(0, 10))
+        tk.set_name("{} + {}", a, b)
         tk.execute(self.check_add_func, a, b)
 
     @fork_test
@@ -76,6 +77,7 @@ class ForkTestDemo(unittest.TestCase):
         tk = testkit()
         a = tk.fork_range(0, 10)
         b = tk.fork_range(0, 10)
+        tk.set_name("{} + {}", a, b)
         self.check_add_func(a, b)
 
     @fork_test(fork_asserts=True)
@@ -83,6 +85,7 @@ class ForkTestDemo(unittest.TestCase):
         tk = testkit()
         a = tk.fork_enum(1, 3, 5)
         b = tk.fork_enum(2, 4, 6)
+        tk.set_name("{} + {}", a, b)
         self.assertEqual(self.add_func(a, b),  a + b)
         self.check_add_func(a, b)
 

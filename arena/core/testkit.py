@@ -69,6 +69,13 @@ class TestKit(abc.ABC):
     def execute(self, forker, *args, **kwargs):
         pass
 
+    @abc.abstractmethod
+    def set_name(self, name, *args, **kwargs):
+        pass
+
+    def fork_value(self, value, **kwargs):
+        return self.fork(SingleValueForker(value), **kwargs)
+
     def fork_range(self, start, end, **kwargs):
         return self.fork(RangeForker(start, end, **kwargs))
 
@@ -112,8 +119,6 @@ class ExecuteForker(Forker[Execute]):
     def do_fork(self, context: ForkContext) -> ForkResult[Execute]:
         def _map(v):
             func, (args, kwargs) = v
-            args = (arg if isinstance(arg, Forker) else _ARG_STUB for arg in args)
-            kwargs = {k: (v if isinstance(v, Forker) else _ARG_STUB) for k, v in kwargs.items()}
             return Execute(func, args=args, kwargs=kwargs)
 
         seed = ChainForker([
@@ -125,6 +130,7 @@ class ExecuteForker(Forker[Execute]):
 
 class BuilderTestKit(TestKit):
     def __init__(self):
+        self._name = None
         self._forkers = []
 
     @property
@@ -143,11 +149,20 @@ class BuilderTestKit(TestKit):
             return None
 
     def execute(self, func, *args, **kwargs):
-        if hasattr(func, '_inner_func'):
-            func = getattr(func, '_inner_func')
-
+        args = tuple(arg if isinstance(arg, Forker) else _ARG_STUB for arg in args)
+        kwargs = {k: (v if isinstance(v, Forker) else _ARG_STUB) for k, v in kwargs.items()}
         self.fork(ExecuteForker(func, args=args, kwargs=kwargs), record=False)
         return _ARG_STUB
+
+    @property
+    def name(self):
+        return self._name
+
+    def set_name(self, name, *args, **kwargs):
+        if not isinstance(name, Forker):
+            name = SingleValueForker(name)
+        forker = ExecuteForker(name.format, args=args, kwargs=kwargs).map_value(lambda func: func())
+        self._name = forker
 
 
 class ExecuteTestKit(TestKit):
@@ -155,15 +170,19 @@ class ExecuteTestKit(TestKit):
         self._actions = actions
         self._executing = False
 
+    @property
+    def executing(self):
+        return self._executing
+
     def fork(self, forker, *, record=True, record_prefix='tk_'):
         if self._executing:
-            raise RuntimeError("Cannot call fork in execute")
+            raise RuntimeError("fork cannot be nested in execute")
 
         return next(self._actions)
 
     def execute(self, forker, *args, **kwargs):
         if self._executing:
-            raise RuntimeError("Execute cannot be nested")
+            raise RuntimeError("execute cannot be nested")
 
         self._executing = True
         try:
@@ -171,6 +190,9 @@ class ExecuteTestKit(TestKit):
             return exe(*args, **kwargs)
         finally:
             self._executing = False
+
+    def set_name(self, name, *args, **kwargs):
+        pass
 
 
 class CaseProxy:
@@ -181,32 +203,21 @@ class CaseProxy:
 
     def __getattr__(self, name):
         value = getattr(self._case, name)
-        if self._is_fork_exec(name, value):
-            def _call(*args, **kwargs):
-                return self._tk.execute(value, *args, **kwargs)
+        if self._fork_asserts and inspect.ismethod(value) and name.startswith('assert'):
+            return fork_exec(value)
 
-            setattr(_call, '_inner_func', value)
-            return _call
         return value
-
-    def _is_fork_exec(self, name, method):
-        if not callable(method):
-            return False
-
-        if self._fork_asserts and inspect.ismethod(method) and name.startswith('assert'):
-            return True
-
-        return getattr(method, 'fork_exec', False)
 
 
 class CaseExecutor:
-    def __init__(self, func, actions: typing.Iterable, *, extend_unittest=None):
+    def __init__(self, func, *, name, actions: typing.Iterable, extend_unittest=None):
+        self.name = name
         self._func = func
         self._actions = actions
         self._extend_unittest = extend_unittest
 
     def run(self, case: unittest.TestCase, **params):
-        with case.subTest(**params):
+        with case.subTest(self.name, **params):
             self._run(case)
 
     def _run(self, case):
@@ -233,12 +244,13 @@ class CaseExecutorForker(Forker):
         self._extend_unittest = extend_unittest
 
     def do_fork(self, context: ForkContext) -> ForkResult:
-        _LOCAL.tk = BuilderTestKit()
+        tk = BuilderTestKit()
+        _LOCAL.tk = tk
         try:
             case = self._extend_unittest(self._case) if self._extend_unittest else self._case
             self._func(case)
-            seed = ChainForker(_LOCAL.tk.forkers)
-            return ReactionForker(seed).do_fork(context).map_value(self._to_case)
+            seed = ChainForker(tk.forkers)
+            return ReactionForker(seed).do_fork(context).map(self._to_case(tk))
         finally:
             _LOCAL.tk = None
 
@@ -246,8 +258,18 @@ class CaseExecutorForker(Forker):
     def name(self):
         return self._case.__name__
 
-    def _to_case(self, actions):
-        return CaseExecutor(self._func, actions, extend_unittest=self._extend_unittest)
+    def _to_case(self, tk: BuilderTestKit):
+        def _map(item):
+            name = None
+            if tk.name:
+                for name_item in tk.name.do_fork(item.context):
+                    name = name_item.value
+
+            return item.context.new_item(CaseExecutor(
+                self._func, actions=item.value, name=name, extend_unittest=self._extend_unittest
+            ))
+
+        return _map
 
 
 def fork_test(func=None, *, fork_asserts=False):
@@ -261,7 +283,9 @@ def fork_test(func=None, *, fork_asserts=False):
             i = 0
             for case in forker:
                 i += 1
-                case.run(self, i=i)
+                if not case.name:
+                    case.name = f"fork_{i}"
+                case.run(self)
 
         return _test_func
 
@@ -273,10 +297,21 @@ def fork_test(func=None, *, fork_asserts=False):
 
 def fork_exec(func=None):
     def _wrapper(_func):
-        setattr(_func, 'fork_exec', True)
-        return _func
+        @functools.wraps(_func)
+        def _wrap_func(*args, **kwargs):
+            tk: TestKit = _LOCAL.tk
+            if not tk:
+                return _func(*args, **kwargs)
+
+            if isinstance(tk, ExecuteTestKit) and tk.executing:
+                return _func(*args, **kwargs)
+            else:
+                return tk.execute(_func, *args, **kwargs)
+
+        return _wrap_func
 
     if func:
         return _wrapper(func)
 
     return _wrapper
+
