@@ -1,5 +1,7 @@
 from collections import OrderedDict
+import unittest
 
+from ..fork2 import *
 from ..testkit import *
 
 
@@ -53,15 +55,44 @@ class TestArgsForker(unittest.TestCase):
                 self.assertDictEqual(kwargs, expected[i * 2 + 1])
 
 
+# func to be test
+def add_func(a, b):
+    return a + b
+
+
 class ForkTestDemo(unittest.TestCase):
     @fork_test
-    def test_fork(self, tk: TestKit):
-        v1 = tk.add_forker(FlatForker([1, 2, 3]))
-        v2 = tk.add_forker(FlatForker(['a', 'b', 'c']))
-        msg1 = self.format("[{}] v1: {}, v2: {}", 'T1', v1, v2)
-        msg2 = self.format("[{title}] v1: {v1}, v2: {v2}", title='T1', v1=v1, v2=v2)
-        self.assertEqual(msg1, msg2)
+    def test_add_func1(self):
+        tk = testkit()
+        a = tk.fork_range(0, 10)
+        b = tk.fork_range(0, 10)
+        tk.execute(self.check_add_func, a, b)
 
-    def format(self, msg, *args, **kwargs):
+    @fork_test
+    def test_add_func2(self):
+        tk = testkit()
+        a = tk.fork_range(0, 10)
+        b = tk.fork_range(0, 10)
+        self.check_add_func(a, b)
+
+    @fork_test(fork_asserts=True)
+    def test_add_func3(self):
+        tk = testkit()
+        a = tk.fork_range(0, 10)
+        b = tk.fork_range(0, 10)
+        self.assertEqual(self.add_func(a, b),  a + b)
+        self.check_add_func(a, b)
+
+    @fork_exec
+    def print(self, msg, *args, **kwargs):
         self.assertIsInstance(msg, str)
-        return msg.format(*args, **kwargs)
+        msg = msg.format(msg, *args, **kwargs)
+        print(msg)
+
+    @fork_exec
+    def check_add_func(self, a, b):
+        self.assertEqual(add_func(a, b), a + b)
+
+    @fork_exec
+    def add_func(self, a, b):
+        return add_func(a, b)

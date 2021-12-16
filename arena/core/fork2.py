@@ -11,6 +11,7 @@ from typing import TypeVar, Generic, Dict, Callable, Any
 T = TypeVar('T')
 
 __all__ = ['ForkContext', 'ForkItem', 'ForkResult', 'Forker', 'TransformForker', 'FlatForker', 'SingleValueForker',
+           'RangeForker',
            'ConcatForker',
            'DefaultValueForker',
            'ReactionForker',
@@ -35,6 +36,9 @@ class ForkContext:
         if name in self._vars:
             return self._vars[name]
         return default
+
+    def has_var(self, name: str):
+        return name in self._vars
 
     def new_item(self, value: T) -> ForkItem[T]:
         return ForkItem.new(self, value)
@@ -164,11 +168,29 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
             key = key_prefix + str(index)
 
         def _record(item: ForkItem):
+            context = item.context
+            if context.has_var(key):
+                raise ValueError(f'{key} already record')
+
             return item.context.set_var(key, item.value).new_item(item.value)
         return key, self.map(_record)
 
     def __getattr__(self, name):
         return self.map_value(lambda value: getattr(value, name))
+
+    def _binary_op(self, other, func):
+        if not isinstance(other, Forker):
+            other = SingleValueForker(other)
+
+        def _op(value):
+            a, b = value
+            return func(a, b)
+
+        seed = ChainForker([self, other])
+        return ReactionForker(seed).map_value(_op)
+
+    def __add__(self, other):
+        return self._binary_op(other, lambda a, b: a + b)
 
     @classmethod
     def _get_record_index(cls):
@@ -223,6 +245,14 @@ class FlatForker(Forker[T]):
 class SingleValueForker(Forker[T]):
     def __new__(cls, value, **kwargs):
         return FlatForker([value], **kwargs)
+
+    def do_fork(self, context: ForkContext) -> ForkResult[T]:
+        pass
+
+
+class RangeForker(Forker[int]):
+    def __new__(cls, start, end, **kwargs):
+        return FlatForker(range(start, end), **kwargs)
 
     def do_fork(self, context: ForkContext) -> ForkResult[T]:
         pass
