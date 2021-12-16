@@ -272,7 +272,7 @@ class CaseExecutorForker(Forker):
         return _map
 
 
-def fork_test(func=None, *, fork_asserts=False):
+def fork_test(func=None, *, fork_asserts=True):
     def _extend_unittest(case):
         return CaseProxy(case, tk=testkit(), fork_asserts=fork_asserts)
 

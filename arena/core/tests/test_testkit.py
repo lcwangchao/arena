@@ -69,7 +69,7 @@ class ForkTestDemo(unittest.TestCase):
     def setUp(self) -> None:
         self.print = False
 
-    @fork_test
+    @fork_test(fork_asserts=False)
     def test_add_func1(self):
         tk = testkit()
         a = tk.fork(RangeForker(0, 10))
@@ -77,7 +77,7 @@ class ForkTestDemo(unittest.TestCase):
         tk.execute(self.check_add_func, a, b)
         tk.set_fork_name("{} + {}", a, b)
 
-    @fork_test
+    @fork_test(fork_asserts=False)
     def test_add_func2(self):
         tk = testkit()
         a = tk.fork_range(0, 10)
@@ -85,7 +85,7 @@ class ForkTestDemo(unittest.TestCase):
         self.check_add_func(a, b)
         tk.set_fork_name("{} + {}", a, b)
 
-    @fork_test(fork_asserts=True)
+    @fork_test
     def test_add_func3(self):
         tk = testkit()
         a = tk.fork_enum(1, 3, 5)
@@ -94,8 +94,17 @@ class ForkTestDemo(unittest.TestCase):
         self.check_add_func(a, b)
         tk.set_fork_name("{} + {}", a, b)
 
-    @fork_test(fork_asserts=True)
+    @fork_test
     def test_add_func4(self):
+        tk = testkit()
+        a = tk.fork_enum(1, 3, 5)
+        b = tk.fork_enum(2, 4, 6)
+        c = tk.fork(a + b)
+        self.assertEqual(self.add_func(a, b), c)
+        tk.set_fork_name("{} + {}", a, b)
+
+    @fork_test
+    def test_add_func5(self):
         tk = testkit()
         a = tk.fork_enum(1, 3, 5)
         b = tk.fork_enum(2, 4, 6)

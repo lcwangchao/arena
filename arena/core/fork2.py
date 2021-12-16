@@ -124,10 +124,11 @@ class ForkResult(Generic[T], Iterator[ForkItem[T]]):
         ))
 
 
-class Forker(abc.ABC, Generic[T], Iterable[T]):
-    _RECORD_INDEX = 0
-    _LOCK = threading.Lock()
+_RECORD_INDEX = 0
+_LOCK = threading.Lock()
 
+
+class Forker(abc.ABC, Generic[T], Iterable[T]):
     @abc.abstractmethod
     def do_fork(self, context: ForkContext) -> ForkResult[T]:
         pass
@@ -194,9 +195,10 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
 
     @classmethod
     def _get_record_index(cls):
-        with cls._LOCK:
-            cls._RECORD_INDEX += 1
-            return cls._RECORD_INDEX
+        global _RECORD_INDEX
+        with _LOCK:
+            _RECORD_INDEX += 1
+            return _RECORD_INDEX
 
 
 class ContextRecordForker(Forker[T]):
