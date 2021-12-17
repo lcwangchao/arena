@@ -27,16 +27,21 @@ class TidbConnection:
         self._conn_id = conn_id
 
     @fork_exec(return_class=ResultSet)
-    def execute(self, sql, *args, fetch_rs=False):
-        sql = sql.format(*args)
-        self._tk.record_path(f'sql@conn#{self._conn_id}', sql)
+    def execute(self, sql, *params, multi=False, fetch_rs=False):
+        msg = sql
+        if params:
+            msg = '{}, ({})'.format(sql, ', '.join([str(p) for p in params]))
+        if multi:
+            msg += " multi=True"
+
+        self._tk.record_path(f'sql@conn#{self._conn_id}', msg)
         with self._conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql, params=params, multi=multi)
             if fetch_rs:
                 return ResultSet(self._tk, rows=cur.fetchall())
 
-    def query(self, sql, *args):
-        return self.execute(sql, *args, fetch_rs=True)
+    def query(self, *args, **kwargs):
+        return self.execute(*args, **kwargs, fetch_rs=True)
 
 
 class TidbTestKit:

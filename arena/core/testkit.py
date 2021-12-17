@@ -110,8 +110,8 @@ class TestKit(abc.ABC):
     def print(self, msg, *args, **kwargs):
         self.execute(self._print, msg, *args, **kwargs)
 
-    def format(self, msg, *args, **kwargs):
-        return self.execute(self._format, msg, *args, **kwargs)
+    def fmt(self, msg, *args, **kwargs):
+        return self.execute(self._fmt, msg, *args, **kwargs)
 
     def _defer(self, func):
         self._defers.append(func)
@@ -124,7 +124,7 @@ class TestKit(abc.ABC):
         print(msg.format(*args, **kwargs))
 
     @classmethod
-    def _format(cls, msg, *args, **kwargs):
+    def _fmt(cls, msg, *args, **kwargs):
         return msg.format(*args, **kwargs)
 
 

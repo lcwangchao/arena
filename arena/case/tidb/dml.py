@@ -14,7 +14,7 @@ class QueryTest(unittest.TestCase):
         # tk.print('table: {}, pk: {}', table_name, pk)
 
         conn = tk.connect(user='root')
-        conn.execute('drop table if exists {}', table_name)
-        conn.execute('create table {} (id int primary key)', table_name)
-        conn.execute('insert into {} value({})', table_name, pk)
-        conn.query('select * from {}', table_name).check([(pk,)])
+        conn.execute(tk.fmt('drop table if exists {}', table_name))
+        conn.execute(tk.fmt('create table {} (id int primary key)', table_name))
+        conn.execute(tk.fmt('insert into {} values(%s)', table_name), pk)
+        conn.query(tk.fmt('select * from {}', table_name)).check([(pk,)])
