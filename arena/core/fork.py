@@ -181,7 +181,7 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
 
     def _binary_op(self, other, func):
         if not isinstance(other, Forker):
-            other = SingleValueForker(other)
+            return self.map_value(lambda v: v + other)
 
         def _op(value):
             a, b = value

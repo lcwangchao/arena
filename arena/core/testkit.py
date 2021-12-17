@@ -9,7 +9,7 @@ import typing
 from arena.core.fork import *
 
 _ARG_STUB = object()
-_LOCAL = threading.local()
+g = threading.local()
 
 __all__ = ['testkit', 'fork_test', 'fork_exec', 'ArgsForker', 'TestKit']
 
@@ -61,6 +61,11 @@ class ArgsForker(Forker):
 
 
 class TestKit(abc.ABC):
+    def __init__(self, ut):
+        self._ut: unittest.TestCase = ut
+        self._path = []
+        self._defers = []
+
     @abc.abstractmethod
     def fork(self, forker, *, record=True, record_prefix='tk_'):
         pass
@@ -72,6 +77,28 @@ class TestKit(abc.ABC):
     @abc.abstractmethod
     def set_fork_name(self, name, *args, **kwargs):
         pass
+
+    @abc.abstractmethod
+    def record_path(self, msg, *args, **kwargs):
+        pass
+
+    @abc.abstractmethod
+    def defer(self, func):
+        pass
+
+    @property
+    def ut(self) -> unittest.TestCase:
+        return self._ut
+
+    @property
+    def path(self):
+        return self._path
+
+    def _defer(self, func):
+        self._defers.append(func)
+
+    def _record_path(self, msg, *args, **kwargs):
+        self._path.append(msg.format(*args, **kwargs))
 
     def fork_value(self, value, **kwargs):
         return self.fork(SingleValueForker(value), **kwargs)
@@ -87,7 +114,7 @@ class TestKit(abc.ABC):
 
 
 def testkit() -> TestKit:
-    return _LOCAL.tk
+    return g.tk
 
 
 class Execute:
@@ -129,7 +156,8 @@ class ExecuteForker(Forker[Execute]):
 
 
 class BuilderTestKit(TestKit):
-    def __init__(self):
+    def __init__(self, ut):
+        super().__init__(ut)
         self._name = None
         self._forkers = []
 
@@ -154,6 +182,12 @@ class BuilderTestKit(TestKit):
         self.fork(ExecuteForker(func, args=args, kwargs=kwargs), record=False)
         return _ARG_STUB
 
+    def record_path(self, msg, *args, **kwargs):
+        return self.execute(self._record_path, msg, *args, **kwargs)
+
+    def defer(self, func):
+        return self.execute(self._defer, func)
+
     @property
     def name(self):
         return self._name
@@ -164,9 +198,17 @@ class BuilderTestKit(TestKit):
         forker = ExecuteForker(name.format, args=args, kwargs=kwargs).map_value(lambda func: func())
         self._name = forker
 
+    def __enter__(self):
+        g.tk = self
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        g.tk = None
+
 
 class ExecuteTestKit(TestKit):
-    def __init__(self, actions: typing.Iterator):
+    def __init__(self, ut, actions: typing.Iterator):
+        super().__init__(ut)
         self._actions = actions
         self._executing = False
 
@@ -191,8 +233,23 @@ class ExecuteTestKit(TestKit):
         finally:
             self._executing = False
 
+    def record_path(self, msg, *args, **kwargs):
+        self._record_path(msg, *args, **kwargs)
+
+    def defer(self, func):
+        return self._defer(func)
+
     def set_fork_name(self, name, *args, **kwargs):
         pass
+
+    def __enter__(self):
+        g.tk = self
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        g.tk = None
+        for func in self._defers:
+            func()
 
 
 class CaseProxy:
@@ -225,16 +282,14 @@ class CaseExecutor:
             return
 
         actions = iter(self._actions)
-        _LOCAL.tk = ExecuteTestKit(actions)
-        try:
-            case = self._extend_unittest(case) if self._extend_unittest else case
-            self._func(case)
-            for _ in actions:
-                raise RuntimeError('should not reach here')
-        except AssertionError:
-            raise
-        finally:
-            _LOCAL.tk = None
+        with ExecuteTestKit(case, actions) as tk:
+            try:
+                case = self._extend_unittest(case) if self._extend_unittest else case
+                self._func(case)
+                for _ in actions:
+                    raise RuntimeError('should not reach here')
+            except AssertionError:
+                raise
 
 
 class CaseExecutorForker(Forker):
@@ -244,15 +299,11 @@ class CaseExecutorForker(Forker):
         self._extend_unittest = extend_unittest
 
     def do_fork(self, context: ForkContext) -> ForkResult:
-        tk = BuilderTestKit()
-        _LOCAL.tk = tk
-        try:
+        with BuilderTestKit(self._case) as tk:
             case = self._extend_unittest(self._case) if self._extend_unittest else self._case
             self._func(case)
             seed = ChainForker(tk.forkers)
             return ReactionForker(seed).do_fork(context).map(self._to_case(tk))
-        finally:
-            _LOCAL.tk = None
 
     @property
     def name(self):
@@ -295,18 +346,21 @@ def fork_test(func=None, *, fork_asserts=True):
     return _wrapper
 
 
-def fork_exec(func=None):
+def fork_exec(func=None, *, return_class=None):
     def _wrapper(_func):
         @functools.wraps(_func)
         def _wrap_func(*args, **kwargs):
-            tk: TestKit = _LOCAL.tk
+            tk: TestKit = g.tk
             if not tk:
                 return _func(*args, **kwargs)
 
             if isinstance(tk, ExecuteTestKit) and tk.executing:
                 return _func(*args, **kwargs)
             else:
-                return tk.execute(_func, *args, **kwargs)
+                ret = tk.execute(_func, *args, **kwargs)
+                if isinstance(tk, BuilderTestKit) and return_class:
+                    ret = return_class(tk)
+                return ret
 
         return _wrap_func
 
