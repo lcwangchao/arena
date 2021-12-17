@@ -65,6 +65,7 @@ class TestKit(abc.ABC):
         self._ut: unittest.TestCase = ut
         self._path = []
         self._defers = []
+        self.state = {}
 
     @abc.abstractmethod
     def fork(self, forker, *, record=True, record_prefix='tk_'):
@@ -79,7 +80,7 @@ class TestKit(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def record_path(self, msg, *args, **kwargs):
+    def record_path(self, topic, msg, *args, **kwargs):
         pass
 
     @abc.abstractmethod
@@ -94,12 +95,6 @@ class TestKit(abc.ABC):
     def path(self):
         return self._path
 
-    def _defer(self, func):
-        self._defers.append(func)
-
-    def _record_path(self, msg, *args, **kwargs):
-        self._path.append(msg.format(*args, **kwargs))
-
     def fork_value(self, value, **kwargs):
         return self.fork(SingleValueForker(value), **kwargs)
 
@@ -112,6 +107,19 @@ class TestKit(abc.ABC):
     def fork_bool(self, **kwargs):
         return self.fork_enum(True, False, **kwargs)
 
+    def print(self, msg, *args, **kwargs):
+        self.execute(self._print, msg, *args, **kwargs)
+
+    def _defer(self, func):
+        self._defers.append(func)
+
+    def _record_path(self, topic, msg, *args, **kwargs):
+        self._path.append((topic, msg.format(*args, **kwargs)))
+
+    @classmethod
+    def _print(cls, msg, *args, **kwargs):
+        print(msg.format(*args, **kwargs))
+
 
 def testkit() -> TestKit:
     return g.tk
@@ -123,18 +131,16 @@ class Execute:
         self._args = args
         self._kwargs = kwargs
 
+    @property
+    def args(self):
+        return self._args
+
+    @property
+    def kwargs(self):
+        return self._kwargs
+
     def __call__(self, *args, **kwargs):
-        func_args = list(self._args)
-        for i, arg in enumerate(func_args):
-            if arg == _ARG_STUB:
-                func_args[i] = args[i]
-
-        func_kwargs = self._kwargs.copy()
-        for k, v in func_kwargs.items():
-            if v == _ARG_STUB:
-                func_kwargs[k] = kwargs[k]
-
-        return self._func(*func_args, **func_kwargs)
+        return self._func(*args, **kwargs)
 
 
 class ExecuteForker(Forker[Execute]):
@@ -177,13 +183,11 @@ class BuilderTestKit(TestKit):
             return None
 
     def execute(self, func, *args, **kwargs):
-        args = tuple(arg if isinstance(arg, Forker) else _ARG_STUB for arg in args)
-        kwargs = {k: (v if isinstance(v, Forker) else _ARG_STUB) for k, v in kwargs.items()}
         self.fork(ExecuteForker(func, args=args, kwargs=kwargs), record=False)
         return _ARG_STUB
 
-    def record_path(self, msg, *args, **kwargs):
-        return self.execute(self._record_path, msg, *args, **kwargs)
+    def record_path(self, topic, msg, *args, **kwargs):
+        return self.execute(self._record_path, topic, msg, *args, **kwargs)
 
     def defer(self, func):
         return self.execute(self._defer, func)
@@ -195,7 +199,8 @@ class BuilderTestKit(TestKit):
     def set_fork_name(self, name, *args, **kwargs):
         if not isinstance(name, Forker):
             name = SingleValueForker(name)
-        forker = ExecuteForker(name.format, args=args, kwargs=kwargs).map_value(lambda func: func())
+        forker = ExecuteForker(name.format, args=args, kwargs=kwargs)\
+            .map_value(lambda func: func(*func.args, **func.kwargs))
         self._name = forker
 
     def __enter__(self):
@@ -233,8 +238,8 @@ class ExecuteTestKit(TestKit):
         finally:
             self._executing = False
 
-    def record_path(self, msg, *args, **kwargs):
-        self._record_path(msg, *args, **kwargs)
+    def record_path(self, topic, msg, *args, **kwargs):
+        self._record_path(topic, msg, *args, **kwargs)
 
     def defer(self, func):
         return self._defer(func)
@@ -288,8 +293,20 @@ class CaseExecutor:
                 self._func(case)
                 for _ in actions:
                     raise RuntimeError('should not reach here')
-            except AssertionError:
-                raise
+            except AssertionError as e:
+                e.args = ((self._fork_path_detail_message(tk.path) + e.args[0]),) + e.args[1:]
+                raise e
+
+    @classmethod
+    def _fork_path_detail_message(cls, path):
+        max_topic_len = 0
+        for topic, _ in path:
+            if topic and len(topic) > max_topic_len:
+                max_topic_len = len(topic)
+
+        fmt = '  {:' + str(max_topic_len + 2) + '} {}'
+        msgs = [fmt.format('[' + tp + ']', msg) for tp, msg in path]
+        return f'\n\nExecute path:\n' + '\n'.join(msgs) + '\n\n'
 
 
 class CaseExecutorForker(Forker):
