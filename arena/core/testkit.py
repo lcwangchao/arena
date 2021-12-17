@@ -6,7 +6,7 @@ import unittest
 import abc
 import typing
 
-from arena.core.fork2 import *
+from arena.core.fork import *
 
 _ARG_STUB = object()
 _LOCAL = threading.local()

@@ -1,6 +1,6 @@
 import unittest
 
-from ..fork2 import *
+from ..fork import *
 
 
 class TestForkContext(unittest.TestCase):

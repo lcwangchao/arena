@@ -1,7 +1,7 @@
 from collections import OrderedDict
 import unittest
 
-from arena.core.fork2 import *
+from arena.core.fork import *
 from arena.core.testkit import *
 
 

@@ -1,42 +1,13 @@
 from __future__ import annotations
 
 import io
-import typing
-from dataclasses import dataclass
-from typing import Iterator
 
-from arena.core.fork import RecursionForker, IterableForker, ForkContext, Forker, RecursionEntityBuilder
+from typing import Optional
+
+from arena.core.fork import *
 from .column import TableColumnsForker, TableColumns
-from .util import AutoIDAllocator
-
-
-@dataclass(frozen=True)
-class TemporaryTableType:
-    type: typing.Optional[str]
-    commit: typing.Optional[str]
-    points: int
-
-
-class TemporaryTableTypeForker(Forker):
-    TYPES = (
-        None,
-        TemporaryTableType('TEMPORARY', commit=None, points=1),
-        TemporaryTableType('GLOBAL TEMPORARY', commit='ON COMMIT DELETE ROWS', points=1)
-    )
-
-    def __init__(self, for_table=False):
-        self._for_table = for_table
-
-    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        tp_iter = map(lambda tp: (ctx, tp), iter(self.TYPES))
-        if not self._for_table:
-            return tp_iter
-
-        builder: TableBuilder = ctx.current_recursion.builder
-        if builder.max_points is None or builder.points < builder.max_points:
-            return tp_iter
-        else:
-            return iter([(ctx, None)])
+from .options import TemporaryTableType, TemporaryTableTypeForker
+from .util import AutoIDAllocator, name_generator
 
 
 class Table:
@@ -85,87 +56,133 @@ class Table:
         return w.getvalue()
 
 
-class TableBuilder(RecursionEntityBuilder):
-    def __init__(self, forker: TableForker):
-        self._points = 0
-        self._max_points = forker.max_points
-        self._forker = forker
+class TableBuilder(Forker):
+    def __init__(self, *, forkers=None, max_points=None):
+        self._forkers = forkers
+        self._max_points = max_points
 
-    @property
-    def points(self):
-        return self._points
+        self._table_name: Optional[str] = None
+        self._temp_type: Optional[TemporaryTableType] = None
+        self._columns: Optional[TableColumns] = None
+        self._table_name: Optional[str] = None
 
-    @property
-    def max_points(self):
-        return self._max_points
-
-    def update(self, entity) -> RecursionEntityBuilder:
-        if not hasattr(entity, 'points'):
-            return self
-
-        builder = TableBuilder(self._forker)
-        builder._points = self._points + entity.points
+    def clone(self) -> TableBuilder:
+        builder = TableBuilder()
+        builder._forkers = self._forkers
+        builder._max_points = self._max_points
+        builder._temp_type = self._temp_type
+        builder._columns = self._columns
         return builder
 
-    def build(self, ctx: ForkContext) -> typing.Tuple[ForkContext, typing.Any]:
-        temp_type = None
-        columns = None
+    def do_fork(self, context: ForkContext) -> ForkResult[T]:
+        if not self._forkers:
+            return context.new_fork_result([Table(
+                name=self._table_name,
+                temp_type=self._temp_type,
+                columns=self._columns
+            )])
 
-        for item in ctx.current_recursion.iter_stack_reverse():
-            if isinstance(item, TableColumns):
-                columns = item
-            elif isinstance(item, TemporaryTableType):
-                temp_type = item
+        forker = self._forkers[0]
+        if callable(forker):
+            kwargs = dict(max_points=self._max_points)
+            forker = forker(**kwargs)
 
-        entity = Table(
-            self._forker.next_tbl_name(),
-            columns=columns,
-            temp_type=temp_type,
-        )
-        return ctx.set_var(self._forker.entity_ctx_var, entity), entity
+        return forker.do_fork(context).map_value(self.to_next_builder)
+
+    def to_next_builder(self, value):
+        builder = self.clone()
+        builder._forkers = self._forkers[1:]
+
+        if value is None:
+            return builder
+
+        if builder._max_points is not None and hasattr(value, 'points'):
+            points = getattr(value, 'points')
+            if points > builder._max_points:
+                points = builder._max_points
+            builder._max_points -= points
+
+        if isinstance(value, dict):
+            table_name = value.get('table_name')
+            if table_name:
+                builder._table_name = table_name
+        elif isinstance(value, TemporaryTableType):
+            builder._temp_type = value
+        elif isinstance(value, TableColumns):
+            builder._columns = value
+
+        return builder
 
 
-class TableForker(Forker):
+class TableForker(Forker[Table]):
     _ID_ALLOCATOR = AutoIDAllocator()
 
-    def __init__(self, *, name_prefix=None, max_points=None):
-        self._id = self._ID_ALLOCATOR.alloc()
-        self._name_prefix = name_prefix or f'tbl_{self._id}_'
-        self._entity_idx = 0
-        self._var = f'tb_{self._id}'
-        self._columns = TableColumnsForker()
-        self._temp_type = TemporaryTableTypeForker(for_table=True)
-        self._max_points = max_points
-        self._invoked = False
+    def __init__(self, *, name_prefix=None, max_points=None, **kwargs):
+        self._forker_id = self._ID_ALLOCATOR.alloc()
+        self._table_name_generator = name_generator(name_prefix or f'tbl_{self._forker_id}_')
+        self._context_var = f'table_forker_{self._forker_id}'
+        self._seed = TableBuilder(
+            forkers=self.children_forkers(kwargs),
+            max_points=max_points
+        )
 
-    @property
-    def entity_ctx_var(self):
-        return self._var
-
-    @property
-    def max_points(self):
-        return self._max_points
-
-    def do_fork(self, *, ctx: ForkContext) -> Iterator[typing.Tuple[ForkContext, typing.Any]]:
-        if self._invoked:
-            raise RuntimeError('already invoked')
-
-        return RecursionForker(
-            forkers=[self._columns, self._temp_type],
-            builder=TableBuilder(self),
-            desc=str(self)
-        ).do_fork(ctx=ctx)
+    def do_fork(self, context: ForkContext) -> ForkResult[T]:
+        def _add_table_to_context(item: ForkItem):
+            return item.set_var(self._context_var, item.value)
+        return ReactionForker(self._seed).do_fork(context).map(_add_table_to_context)
 
     def next_tbl_name(self):
-        self._entity_idx += 1
-        return f'{self._name_prefix}{self._entity_idx}'
+        return next(self._table_name_generator)
 
-    def _get_ctx_entity_attr(self, ctx: ForkContext, item):
-        entity = ctx.get_var(self._var)
-        return getattr(entity, item)
+    def context_table(self) -> Forker[Table]:
+        def _map(item: ForkItem):
+            table = item.get_var(item.value)
+            if table is None:
+                raise RuntimeError('Table not found in context')
+            return item.context.new_item(table)
 
-    def __getattr__(self, item):
-        return IterableForker([item]).map(self._get_ctx_entity_attr, desc=f'{str(self)}.{item}')
+        return SingleValueForker(self._context_var).map(_map)
 
     def __str__(self):
-        return "Table"
+        return "TableForker"
+
+    def children_forkers(self, kwargs):
+        children = [
+            ('temporary_table', TemporaryTableTypeForker),
+            ('columns', TableColumnsForker),
+        ]
+
+        forkers = []
+        for key, cls in children:
+            kw = kwargs.get(key, {})
+            if kw is None:
+                continue
+
+            factory = self.child_forker_factory(cls, **kw)
+            if factory:
+                forkers.append(factory)
+
+        def _table_name_factory(**_):
+            return SingleValueForker({'table_name': self.next_tbl_name()})
+
+        forkers.append(_table_name_factory)
+        return forkers
+
+    @classmethod
+    def child_forker_factory(cls, child_cls, **kwargs):
+        max_points1 = kwargs.get('max_points')
+
+        def _factory(**kw):
+            kwargs.update(kw)
+            max_points2 = kw.get('max_points')
+            if max_points1 is not None and max_points2 is not None:
+                max_points = min(max_points1, max_points2)
+            elif max_points1 is not None:
+                max_points = max_points1
+            else:
+                max_points = max_points2
+
+            kwargs['max_points'] = max_points
+            return child_cls(**kwargs)
+
+        return _factory
