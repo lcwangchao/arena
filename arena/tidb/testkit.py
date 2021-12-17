@@ -51,7 +51,6 @@ class TidbTestKit:
                              f'host: {host}, port: {port}, database: {database}, user: {user}, '
                              f'password: {"*yes*" if password else "N/A"}')
         conn = mysql.connector.connect(host=host, port=port, database=database, user=user, password=password, **kwargs)
-        conn.prepare_for_mysql()
         self._tk.defer(lambda: conn.close())
         return TidbConnection(self._tk, conn=conn, conn_id=self._last_conn_id)
 
