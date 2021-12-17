@@ -1,6 +1,8 @@
 import unittest
+from collections import OrderedDict
 
 from ..fork import *
+from ..fork import _ArgsForker
 
 
 class TestForkContext(unittest.TestCase):
@@ -239,3 +241,120 @@ class TestChainReactionForker(unittest.TestCase):
             for value in item.value:
                 expected_dict[str(value)] = expected_dict.get(str(value), 0) + 1
             self.assertDictEqual(item.context.vars, expected_dict)
+
+
+class TestArgsForker(unittest.TestCase):
+    def test_args(self):
+        self.check_args(_ArgsForker(), [
+            (), {}
+        ])
+
+        self.check_args(_ArgsForker(args=[1, None, 3]), [
+            (1, None, 3), {}
+        ])
+
+        self.check_args(_ArgsForker(args=[1, FlatForker([10, 11]), FlatForker([3, 4])]), [
+            (1, 10, 3), {},
+            (1, 10, 4), {},
+            (1, 11, 3), {},
+            (1, 11, 4), {},
+        ])
+
+        self.check_args(_ArgsForker(kwargs={'a': 1, 'b': 2, 'c': None}), [
+            (), {'a': 1, 'b': 2, 'c': None}
+        ])
+
+        kwargs = OrderedDict([('a', 1), ('b', FlatForker([2, 3])), ('c', FlatForker([4, 5]))])
+        self.check_args(_ArgsForker(kwargs=kwargs), [
+            (), {'a': 1, 'b': 2, 'c': 4},
+            (), {'a': 1, 'b': 2, 'c': 5},
+            (), {'a': 1, 'b': 3, 'c': 4},
+            (), {'a': 1, 'b': 3, 'c': 5},
+        ])
+
+        self.check_args(_ArgsForker(args=[1, FlatForker([10, 11]), 3], kwargs=kwargs), [
+            (1, 10, 3), {'a': 1, 'b': 2, 'c': 4},
+            (1, 10, 3), {'a': 1, 'b': 2, 'c': 5},
+            (1, 10, 3), {'a': 1, 'b': 3, 'c': 4},
+            (1, 10, 3), {'a': 1, 'b': 3, 'c': 5},
+            (1, 11, 3), {'a': 1, 'b': 2, 'c': 4},
+            (1, 11, 3), {'a': 1, 'b': 2, 'c': 5},
+            (1, 11, 3), {'a': 1, 'b': 3, 'c': 4},
+            (1, 11, 3), {'a': 1, 'b': 3, 'c': 5},
+        ])
+
+    def check_args(self, forker, expected):
+        result = list(forker)
+        self.assertEqual(len(result), len(expected) / 2)
+        for i, v in enumerate(result):
+            args, kwargs = v
+            with self.subTest(i=i):
+                self.assertTupleEqual(args, expected[i * 2])
+                self.assertDictEqual(kwargs, expected[i * 2 + 1])
+
+
+class TestOverride(unittest.TestCase):
+    def test_call(self):
+        def _add(x, y):
+            return x + y
+
+        def _mul(x, y):
+            return x * y
+
+        self.assertListEqual(list(Forker.call(_add, 1, 2)), [3])
+        self.assertListEqual(list(Forker.call(FlatForker([_add, _mul]), 1, 2)), [3, 2])
+        self.assertListEqual(list(Forker.call(
+            FlatForker([_add, _mul]),
+            1,
+            FlatForker([2, 3]))
+        ), [3, 4, 2, 3])
+        self.assertListEqual(list(Forker.call(
+            FlatForker([_add, _mul]),
+            FlatForker([1, 2]),
+            FlatForker([3, 4]))
+        ), [4, 5, 5, 6, 3, 4, 6, 8])
+
+        self.assertListEqual(list(Forker.call(_add, 1, y=2)), [3])
+        self.assertListEqual(list(Forker.call(_add, x=1, y=2)), [3])
+        self.assertListEqual(list(Forker.call(
+            FlatForker([_add, _mul]),
+            1,
+            y=FlatForker([2, 3]))
+        ), [3, 4, 2, 3])
+        self.assertListEqual(list(Forker.call(
+            FlatForker([_add, _mul]),
+            x=FlatForker([1, 2]),
+            y=FlatForker([3, 4]))
+        ), [4, 5, 5, 6, 3, 4, 6, 8])
+
+        # __call__
+        class _A:
+            def __init__(self, x):
+                self.x = x
+
+            def __call__(self, y):
+                return self.x + y
+
+        f = FlatForker([_A(1), _A(2)])
+        self.assertListEqual(list(f(1)), [2, 3])
+        self.assertListEqual(list(f(FlatForker([3, 4]))), [4, 5, 5, 6])
+
+    def test_get_attr(self):
+        class _A:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+        f = FlatForker([_A(1, 2), _A(3, 4)])
+        self.assertListEqual(list(f.x), [1, 3])
+        self.assertListEqual(list(f.y), [2, 4])
+
+    def test_override_builtin_op(self):
+        a = FlatForker([1, 2])
+        b = FlatForker([4, 5])
+        self.assertListEqual(list(a + 1), [2, 3])
+        self.assertListEqual(list(a + b), [5, 6, 6, 7])
+        self.assertListEqual(list(1 + a), [2, 3])
+
+        a = FlatForker([[1, 2, 3], [4, 5, 6]])
+        self.assertListEqual(list(a[0]), [1, 4])

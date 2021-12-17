@@ -8,6 +8,8 @@ import abc
 import itertools
 from typing import TypeVar, Generic, Dict, Callable, Any
 
+from arena.core.reflect import BUILTIN_OPS
+
 T = TypeVar('T')
 
 __all__ = ['ForkContext', 'ForkItem', 'ForkResult', 'Forker', 'TransformForker', 'FlatForker', 'SingleValueForker',
@@ -128,6 +130,19 @@ _RECORD_INDEX = 0
 _LOCK = threading.Lock()
 
 
+def decorate_forker(cls):
+    def _op_func(name):
+        def _func(self, *args, **kwargs):
+            return self.map_value(lambda v: getattr(v, name))(*args, **kwargs)
+        _func.__name__ = name
+        return _func
+
+    for op in BUILTIN_OPS:
+        setattr(cls, op, _op_func(op))
+    return cls
+
+
+@decorate_forker
 class Forker(abc.ABC, Generic[T], Iterable[T]):
     @abc.abstractmethod
     def do_fork(self, context: ForkContext) -> ForkResult[T]:
@@ -177,21 +192,10 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
         return key, self.map(_record)
 
     def __getattr__(self, name):
-        return self.map_value(lambda value: getattr(value, name))
+        return self.map_value(lambda v: getattr(v, name))
 
-    def _binary_op(self, other, func):
-        if not isinstance(other, Forker):
-            return self.map_value(lambda v: v + other)
-
-        def _op(value):
-            a, b = value
-            return func(a, b)
-
-        seed = ChainForker([self, other])
-        return ReactionForker(seed).map_value(_op)
-
-    def __add__(self, other):
-        return self._binary_op(other, lambda a, b: a + b)
+    def __call__(self, *args, **kwargs):
+        return self.call(self, *args, **kwargs)
 
     @classmethod
     def _get_record_index(cls):
@@ -199,6 +203,59 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
         with _LOCK:
             _RECORD_INDEX += 1
             return _RECORD_INDEX
+
+    @classmethod
+    def call(cls, func, *args, **kwargs) -> Forker:
+        if not isinstance(func, Forker):
+            func = SingleValueForker(func)
+        seed = ChainForker([func, _ArgsForker(args=args, kwargs=kwargs)])
+        return ReactionForker(seed).map_value(lambda value: value[0](*value[1][0], **value[1][1]))
+
+
+class _ArgsForker(Forker):
+    _NONE = object()
+
+    def __init__(self, *, args=None, kwargs=None):
+        self._args = [self._value_forker(v) for v in args] if args else []
+        self._kwargs = [self._key_value_forker(kv) for kv in kwargs.items()] if kwargs else []
+
+    def do_fork(self, context: ForkContext) -> ForkResult:
+        args = self._args_forker()
+        kwargs = self._kwargs_forker()
+        return ReactionForker(ChainForker([args, kwargs])).do_fork(context)
+
+    def _args_forker(self):
+        def _map(args):
+            return tuple(arg for arg in args if arg != self._NONE)
+
+        return DefaultValueForker(
+            ReactionForker(ChainForker(self._args, initializer=lambda: ())).map_value(_map),
+            default={}
+        )
+
+    def _kwargs_forker(self):
+        def _reduce(state, item):
+            k, v = item
+            if v != self._NONE:
+                state[k] = v
+            return {**state, k: v}
+
+        return DefaultValueForker(
+            ReactionForker(ChainForker(self._kwargs, initializer=lambda: dict(), reduce=_reduce)),
+            default=()
+        )
+
+    @classmethod
+    def _value_forker(cls, value):
+        return DefaultValueForker(value, default=cls._NONE) \
+            if isinstance(value, Forker) else SingleValueForker(value)
+
+    @classmethod
+    def _key_value_forker(cls, item):
+        key, value = item
+        if isinstance(value, Forker):
+            return DefaultValueForker(value, default=cls._NONE).map_value(lambda v: (key, v))
+        return SingleValueForker((key, value))
 
 
 class ContextRecordForker(Forker[T]):
@@ -329,7 +386,7 @@ class ChainForker(Forker):
             return context.new_fork_result([self._state])
 
         forker = self._forkers[0]
-        if callable(forker):
+        if callable(forker) and not isinstance(forker, Forker):
             forker = forker(self._state)
 
         next_forkers = self._forkers[1:]
