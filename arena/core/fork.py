@@ -15,6 +15,7 @@ T = TypeVar('T')
 __all__ = ['ForkContext', 'ForkItem', 'ForkResult', 'Forker', 'TransformForker', 'FlatForker', 'SingleValueForker',
            'RangeForker',
            'ConcatForker',
+           'ContainerForker',
            'DefaultValueForker',
            'ReactionForker',
            'ContextRecordForker',
@@ -222,54 +223,50 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
     def call(cls, func, *args, **kwargs) -> Forker:
         if not isinstance(func, Forker):
             func = SingleValueForker(func)
-        seed = ChainForker([func, _ArgsForker(args=args, kwargs=kwargs)])
-        return ReactionForker(seed).map_value(lambda value: value[0](*value[1][0], **value[1][1]))
+        seed = ChainForker([func, ContainerForker(args), ContainerForker(kwargs)])
+        return ReactionForker(seed).map_value(lambda value: value[0](*value[1], **value[2]))
 
 
-class _ArgsForker(Forker):
+class ContainerForker(Forker):
     _NONE = object()
 
-    def __init__(self, *, args=None, kwargs=None):
-        self._args = [self._value_forker(v) for v in args] if args else []
-        self._kwargs = [self._key_value_forker(kv) for kv in kwargs.items()] if kwargs else []
+    def __init__(self, obj):
+        if not isinstance(obj, (tuple, list, dict)):
+            raise ValueError('obj must be a type with tuple, list or dict')
+        self._obj = obj
 
     def do_fork(self, context: ForkContext) -> ForkResult:
-        args = self._args_forker()
-        kwargs = self._kwargs_forker()
-        return ReactionForker(ChainForker([args, kwargs])).do_fork(context)
+        if not self._obj:
+            return context.new_fork_result([self._obj])
 
-    def _args_forker(self):
-        def _map(args):
-            return tuple(arg for arg in args if arg != self._NONE)
-
-        return DefaultValueForker(
-            ReactionForker(ChainForker(self._args, initializer=lambda: ())).map_value(_map),
-            default={}
-        )
-
-    def _kwargs_forker(self):
-        def _reduce(state, item):
-            k, v = item
-            if v != self._NONE:
-                state[k] = v
-            return {**state, k: v}
-
-        return DefaultValueForker(
-            ReactionForker(ChainForker(self._kwargs, initializer=lambda: dict(), reduce=_reduce)),
-            default=()
-        )
+        if isinstance(self._obj, dict):
+            return self._fork_dict(context, self._obj)
+        return self._fork_tuple_or_list(context, self._obj)
 
     @classmethod
-    def _value_forker(cls, value):
-        return DefaultValueForker(value, default=cls._NONE) \
-            if isinstance(value, Forker) else SingleValueForker(value)
+    def _fork_dict(cls, context: ForkContext, obj) -> ForkResult:
+        forkers = [cls._dict_item_forker(k, v) for k, v in obj.items()]
+        return cls._fork_tuple_or_list(context, forkers).map_value(lambda l: {k: v for k, v in l if v != cls._NONE})
 
     @classmethod
-    def _key_value_forker(cls, item):
-        key, value = item
-        if isinstance(value, Forker):
-            return DefaultValueForker(value, default=cls._NONE).map_value(lambda v: (key, v))
-        return SingleValueForker((key, value))
+    def _dict_item_forker(cls, k, v) -> Forker:
+        if isinstance(v, Forker):
+            return DefaultValueForker(v.map_value(lambda val: (k, val)), default=(cls._NONE, cls._NONE))
+        else:
+            return SingleValueForker((k, v))
+
+    @classmethod
+    def _fork_tuple_or_list(cls, context: ForkContext, obj) -> ForkResult:
+        def _check(item):
+            if item.value == cls._NONE:
+                raise ValueError('empty')
+
+        is_tuple = isinstance(obj, tuple)
+        seed = ChainForker([v if isinstance(v, Forker) else SingleValueForker(v) for v in obj])
+        return DefaultValueForker(ReactionForker(seed), default=cls._NONE) \
+            .foreach(_check) \
+            .map_value(lambda v: tuple(v) if is_tuple else list(v))\
+            .do_fork(context)
 
 
 class ContextRecordForker(Forker[T]):

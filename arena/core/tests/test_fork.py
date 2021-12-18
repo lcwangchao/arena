@@ -2,7 +2,6 @@ import unittest
 from collections import OrderedDict
 
 from ..fork import *
-from ..fork import _ArgsForker
 
 
 class TestForkContext(unittest.TestCase):
@@ -255,54 +254,52 @@ class TestChainReactionForker(unittest.TestCase):
             self.assertDictEqual(item.context.vars, expected_dict)
 
 
-class TestArgsForker(unittest.TestCase):
-    def test_args(self):
-        self.check_args(_ArgsForker(), [
-            (), {}
+class TestContainerForker(unittest.TestCase):
+    def test_list(self):
+        self.assertListEqual(list(ContainerForker([])), [[]])
+        self.assertListEqual(list(ContainerForker([1, 2, 3])), [[1, 2, 3]])
+        self.assertListEqual(
+            list(ContainerForker([FlatForker([1, 2]), 3, FlatForker([4, 5])])),
+            [[1, 3, 4], [1, 3, 5], [2, 3, 4], [2, 3, 5]]
+        )
+        try:
+            list(ContainerForker([1, 2, FlatForker([])]))
+            self.fail()
+        except ValueError:
+            pass
+
+    def test_tuple(self):
+        self.assertListEqual(list(ContainerForker(())), [()])
+        self.assertListEqual(list(ContainerForker((1, 2, 3)),), [(1, 2, 3)])
+        self.assertListEqual(
+            list(ContainerForker((FlatForker([1, 2]), 3, FlatForker([4, 5])))),
+            [(1, 3, 4), (1, 3, 5), (2, 3, 4), (2, 3, 5)]
+        )
+        try:
+            list(ContainerForker((1, 2, FlatForker([]))))
+            self.fail()
+        except ValueError:
+            pass
+
+    def test_dict(self):
+        self.assertListEqual(list(ContainerForker({})), [{}])
+        self.assertListEqual(list(ContainerForker({'a': 1, 'b': 2})), [{'a': 1, 'b': 2}])
+
+        obj = OrderedDict([('a', 1), ('b', FlatForker([2, 3])), ('c', FlatForker([4, 5]))])
+        self.assertListEqual(list(ContainerForker(obj)), [
+            {'a': 1, 'b': 2, 'c': 4},
+            {'a': 1, 'b': 2, 'c': 5},
+            {'a': 1, 'b': 3, 'c': 4},
+            {'a': 1, 'b': 3, 'c': 5},
         ])
 
-        self.check_args(_ArgsForker(args=[1, None, 3]), [
-            (1, None, 3), {}
+        obj = OrderedDict([('a', FlatForker([])), ('b', FlatForker([2, 3])), ('c', FlatForker([4, 5]))])
+        self.assertListEqual(list(ContainerForker(obj)), [
+            {'b': 2, 'c': 4},
+            {'b': 2, 'c': 5},
+            {'b': 3, 'c': 4},
+            {'b': 3, 'c': 5},
         ])
-
-        self.check_args(_ArgsForker(args=[1, FlatForker([10, 11]), FlatForker([3, 4])]), [
-            (1, 10, 3), {},
-            (1, 10, 4), {},
-            (1, 11, 3), {},
-            (1, 11, 4), {},
-        ])
-
-        self.check_args(_ArgsForker(kwargs={'a': 1, 'b': 2, 'c': None}), [
-            (), {'a': 1, 'b': 2, 'c': None}
-        ])
-
-        kwargs = OrderedDict([('a', 1), ('b', FlatForker([2, 3])), ('c', FlatForker([4, 5]))])
-        self.check_args(_ArgsForker(kwargs=kwargs), [
-            (), {'a': 1, 'b': 2, 'c': 4},
-            (), {'a': 1, 'b': 2, 'c': 5},
-            (), {'a': 1, 'b': 3, 'c': 4},
-            (), {'a': 1, 'b': 3, 'c': 5},
-        ])
-
-        self.check_args(_ArgsForker(args=[1, FlatForker([10, 11]), 3], kwargs=kwargs), [
-            (1, 10, 3), {'a': 1, 'b': 2, 'c': 4},
-            (1, 10, 3), {'a': 1, 'b': 2, 'c': 5},
-            (1, 10, 3), {'a': 1, 'b': 3, 'c': 4},
-            (1, 10, 3), {'a': 1, 'b': 3, 'c': 5},
-            (1, 11, 3), {'a': 1, 'b': 2, 'c': 4},
-            (1, 11, 3), {'a': 1, 'b': 2, 'c': 5},
-            (1, 11, 3), {'a': 1, 'b': 3, 'c': 4},
-            (1, 11, 3), {'a': 1, 'b': 3, 'c': 5},
-        ])
-
-    def check_args(self, forker, expected):
-        result = list(forker)
-        self.assertEqual(len(result), len(expected) / 2)
-        for i, v in enumerate(result):
-            args, kwargs = v
-            with self.subTest(i=i):
-                self.assertTupleEqual(args, expected[i * 2])
-                self.assertDictEqual(kwargs, expected[i * 2 + 1])
 
 
 class TestOverride(unittest.TestCase):
