@@ -87,6 +87,7 @@ class TestKit(abc.ABC):
         self._ut: unittest.TestCase = ut
         self._path = []
         self._defers = []
+        self._debug = False
         self.state = {}
 
     @abc.abstractmethod
@@ -109,17 +110,23 @@ class TestKit(abc.ABC):
     def name(self):
         return self._name
 
-    @name.setter
-    def name(self, name):
+    def debug(self, debug=True):
+        self._debug = debug
+
+    def set_name(self, name):
         if isinstance(name, Forker) and not isinstance(name, EvaluateSafeForker):
             raise ValueError('name forker must be evaluate safe')
         self._name = name
 
     def log_path(self, topic, msg):
-        self.execute(lambda: self._path.append((topic, msg)))
+        def _func():
+            if self._debug:
+                print('    [{}] {}'.format(topic, msg))
+            self._path.append((topic, msg))
+        self.execute(_func)
 
-    def defer(self, func):
-        self.execute(lambda: self._defers.append(func))
+    def defer(self, func, *args, **kwargs):
+        self.execute(lambda: self._defers.append((func, args, kwargs)))
 
     def pick_range(self, start, end, **kwargs):
         return self.pick(RangeForker(start, end), **kwargs, skip_safe_check=True)
@@ -136,14 +143,23 @@ class TestKit(abc.ABC):
     def format(self, msg, *args, **kwargs):
         return self.execute(msg.format, _call_safe=True, *args, **kwargs)
 
+    def execute_or_not(self, flag: bool, func, *args, **kwargs):
+        def _exec():
+            if flag:
+                return func(*args, **kwargs)
+        self.execute(_exec)
+
     def __enter__(self):
         g.tk = self
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         g.tk = None
-        for func in self._defers:
-            func()
+        self._defers.reverse()
+        defers = self._defers
+        self._defers = []
+        for func, args, kwargs in defers:
+            func(*args, **kwargs)
 
 
 class BuilderTestKit(TestKit):
@@ -217,27 +233,40 @@ class CaseExecutor:
         self._func = func
         self._values = values
 
-    def run(self, case: unittest.TestCase, **params):
+    def run(self, case: unittest.TestCase, *, debug, **params):
         with case.subTest(self._name, **params):
-            self._run(case)
+            if debug:
+                print(f'\n-->  Forked: {self._name}')
+            try:
+                self._run(case, debug=debug)
+                if debug:
+                    print('\n    SUCCEED')
+            except Exception:
+                if debug:
+                    print('\n    FAILED')
+                raise
 
-    def _run(self, case):
+    def _run(self, case, *, debug):
         values = iter(self._values)
         with ExecuteTestKit(case, values) as tk:
             try:
-                tk.name = self._name
+                tk.debug(debug)
+                tk.set_name(self._name)
                 self._func(case)
                 for _ in values:
                     raise RuntimeError('should not reach here')
             except AssertionError as e:
-                path_msg = self._fork_path_detail_message(tk.path)
-                if e.args[0]:
-                    parts = e.args[0].split('\n', 1)
-                    detail = e.args[1] if len(parts) > 1 else ''
-                    e.args = ((parts[0] + '\n\n' + path_msg + detail),) + e.args[1:]
-                else:
-                    e.args = ('None\n' + path_msg,)
-                raise e
+                raise self._handle_error(tk, e)
+
+    def _handle_error(self, tk, e):
+        path_msg = self._fork_path_detail_message(tk.path)
+        if e.args[0]:
+            parts = e.args[0].split('\n', 1)
+            detail = parts[1] if len(parts) > 1 else ''
+            e.args = ((parts[0] + '\n\n' + path_msg + detail),) + e.args[1:]
+        else:
+            e.args = ('None\n' + path_msg,)
+        return e
 
     @classmethod
     def _fork_path_detail_message(cls, path):
@@ -288,12 +317,15 @@ class CaseExecutorForker(Forker):
                 ))
 
 
-def fork_test(func=None):
+def fork_test(func=None, *, debug=False):
     def _wrapper(_func):
         @functools.wraps(_func)
         def _test_func(self):
+            if debug:
+                print(f'\n*** Start fork test: {_func.__name__} ***')
+
             for ut in CaseExecutorForker(self, _func):
-                ut.run(self)
+                ut.run(self, debug=debug)
 
         return _test_func
 

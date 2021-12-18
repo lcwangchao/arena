@@ -65,4 +65,7 @@ BUILTIN_OPS = [
     '__getitem__',
     '__setitem__',
     '__delitem__',
+
+    '__enter__',
+    '__exit__',
 ]

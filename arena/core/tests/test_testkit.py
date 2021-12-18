@@ -41,7 +41,7 @@ class ForkTestDemo(unittest.TestCase):
         a = tk.pick_range(0, 10)
         b = tk.pick_range(0, 10)
         self.check_add_func(a, b)
-        tk.name = tk.format("{} + {}", a, b)
+        tk.set_name(tk.format("{} + {}", a, b))
 
     @fork_test
     def test_add_func3(self):
@@ -50,7 +50,7 @@ class ForkTestDemo(unittest.TestCase):
         b = tk.pick_enum(2, 4, 6)
         self.assertEqual(self.add_func(a, b),  a + b)
         self.check_add_func(a, b)
-        tk.name = tk.format("{} + {}", a, b)
+        tk.set_name(tk.format("{} + {}", a, b))
 
     @fork_test
     def test_add_func4(self):
@@ -59,7 +59,7 @@ class ForkTestDemo(unittest.TestCase):
         b = tk.pick_enum(2, 4, 6)
         c = tk.pick(a + b)
         self.assertEqual(self.add_func(a, b), c)
-        tk.name = tk.format("{} + {}", a, b)
+        tk.set_name(tk.format("{} + {}", a, b))
 
     @fork_test
     def test_add_func5(self):
@@ -67,7 +67,7 @@ class ForkTestDemo(unittest.TestCase):
         a = tk.pick_enum(1, 3, 5)
         b = tk.pick_enum(2, 4, 6)
         self.assertEqual(another_add_func(a, b),  a + b)
-        tk.name = tk.format("{} + {}", a, b)
+        tk.set_name(tk.format("{} + {}", a, b))
 
     @fork_test
     def test_demo_obj(self):
