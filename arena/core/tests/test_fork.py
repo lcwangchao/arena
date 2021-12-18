@@ -143,6 +143,18 @@ class TestForker(unittest.TestCase):
             list(ctx.new_fork_result([2, 3])),
         )
 
+    def test_flat_map(self):
+        def _func(item: ForkItem):
+            return [item, item.context.new_item(item.value + 10)]
+        forker = FlatForker([1, 2]).flat_map(_func)
+        self.assertListEqual(list(forker), [1, 11, 2, 12])
+
+    def test_flat_map_value(self):
+        def _func(v):
+            return [v, v + 10]
+        forker = FlatForker([1, 2]).flat_map_value(_func)
+        self.assertListEqual(list(forker), [1, 11, 2, 12])
+
 
 class TestChainReactionForker(unittest.TestCase):
     def test_simple_forkers(self):

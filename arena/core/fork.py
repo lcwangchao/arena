@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import abc
 import itertools
-from typing import TypeVar, Generic, Dict, Callable, Any
+from typing import TypeVar, Generic, Dict, Callable
 
 from arena.core.reflect import BUILTIN_OPS
 
@@ -96,6 +96,14 @@ class ForkResult(Generic[T], Iterator[ForkItem[T]]):
             self._iter
         ))
 
+    def flat_map(self, func):
+        return ForkResult(itertools.chain.from_iterable(
+            map(func, self._iter)
+        ))
+
+    def flat_map_value(self, func):
+        return self.flat_map(lambda item: item.context.new_fork_result(func(item.value)))
+
     def foreach(self, func):
         def _foreach(item):
             func(item)
@@ -167,6 +175,12 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
 
     def map_value(self, func):
         return self.transform_result(lambda r: r.map_value(func))
+
+    def flat_map(self, func):
+        return self.transform_result(lambda r: r.flat_map(func))
+
+    def flat_map_value(self, func):
+        return self.transform_result(lambda r: r.flat_map_value(func))
 
     def foreach(self, func):
         return self.transform_result(lambda r: r.foreach(func))

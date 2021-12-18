@@ -55,9 +55,14 @@ BUILTIN_OPS = [
     '__floor__',
     '__ceil__',
 
+    '__lt__',
+    '__le__',
+    '__eq__',
+    '__ne__',
+    '__gt__',
+    '__ge__',
+
     '__getitem__',
     '__setitem__',
     '__delitem__',
 ]
-
-

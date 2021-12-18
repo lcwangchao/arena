@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mysql.connector
 
-from arena.core.testkit import TestKit, testkit, fork_exec
+from arena.core.testkit import TestKit, testkit, execute
 
 
 class ResultSet:
@@ -10,12 +10,10 @@ class ResultSet:
         self._tk = tk
         self._rows = rows
 
-    @fork_exec
     def check(self, rows):
         ut = self._tk.ut
         ut.assertListEqual(self._rows, rows)
 
-    @fork_exec
     def print(self):
         print(self._rows)
 
@@ -26,7 +24,6 @@ class TidbConnection:
         self._conn = conn
         self._conn_id = conn_id
 
-    @fork_exec(return_class=ResultSet)
     def execute(self, sql, *params, multi=False, fetch_rs=False):
         msg = sql
         if params:
@@ -34,7 +31,7 @@ class TidbConnection:
         if multi:
             msg += " multi=True"
 
-        self._tk.record_path(f'sql@conn#{self._conn_id}', msg)
+        self._tk.log_path(f'sql@conn#{self._conn_id}', msg)
         with self._conn.cursor() as cur:
             cur.execute(sql, params=params, multi=multi)
             if fetch_rs:
@@ -44,17 +41,18 @@ class TidbConnection:
         return self.execute(*args, **kwargs, fetch_rs=True)
 
 
-class TidbTestKit:
+class TidbTestKit(TestKit):
     def __init__(self, tk: TestKit):
+        super().__init__(tk.ut)
         self._tk = tk
         self._last_conn_id = 0
 
-    @fork_exec(return_class=TidbConnection)
+    @execute
     def connect(self, *, host='localhost', port=4000, database='test', user=None, password=None, **kwargs):
         self._last_conn_id += 1
-        self._tk.record_path(f'new_conn#{self._last_conn_id}',
-                             f'host: {host}, port: {port}, database: {database}, user: {user}, '
-                             f'password: {"*yes*" if password else "N/A"}')
+        self._tk.log_path(f'new_conn#{self._last_conn_id}',
+                          f'host: {host}, port: {port}, database: {database}, user: {user}, '
+                          f'password: {"*yes*" if password else "N/A"}')
         conn = mysql.connector.connect(host=host, port=port, database=database, user=user, password=password, **kwargs)
         self._tk.defer(lambda: conn.close())
         return TidbConnection(self._tk, conn=conn, conn_id=self._last_conn_id)
@@ -63,6 +61,12 @@ class TidbTestKit:
         if not hasattr(self._tk, item):
             raise AttributeError(f"'{self.__class__.__name__}' object object has no attribute '{item}'")
         return getattr(self._tk, item)
+
+    def pick(self, *args, **kwargs):
+        return self._tk.pick(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        return self._tk.execute(*args, **kwargs)
 
 
 def tidb_testkit() -> TidbTestKit:
