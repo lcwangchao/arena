@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from arena.core.testkit import fork_test, execute
@@ -31,7 +32,8 @@ class TxnTest(unittest.TestCase):
 
         explicit_txn = tk.pick_bool()
         prepare = tk.pick_bool()
-        tk.set_name(tk.format('ExplicateTxn({}), Prepared({})', explicit_txn, prepare))
+        stale_read = tk.pick_bool()
+        tk.set_name(tk.format('ExplicateTxn: {}, Prepared: {}, StaleRead: {}', explicit_txn, prepare, stale_read))
 
         # prepare data
         conn: TidbConnection = tk.connect(user='root')
@@ -39,9 +41,26 @@ class TxnTest(unittest.TestCase):
         conn.exec_sql('create table t1 (id int primary key, v int)')
         tk.defer(conn.exec_sql, 'drop table if exists t1')
         conn.exec_sql('insert into t1 values(1, 10)')
+        conn.exec_sql('set @a=now(6)')
+        time.sleep(0.1)
+        conn.exec_sql('update t1 set v=20 where id=1')
 
         # run
-        tk.execute_or_not(explicit_txn, conn.exec_sql, 'begin')
-        conn.query('select * from t1 where id = 1', prepared=prepare).check([(1, 10)])
-        conn.exec_sql('insert into t1 values(2, 10)')
-        tk.execute_or_not(explicit_txn, conn.exec_sql, 'commit')
+        self.may_begin_txn(tk, conn, explicit=explicit_txn, stale_read=stale_read)
+        v = tk.if_(stale_read and explicit_txn).then_return(10).else_return(20).end()
+        conn.query('select * from t1 where id = 1', prepared=prepare).check([(1, v)])
+        self.may_commit_txn(tk, conn, explicit=explicit_txn)
+
+    @classmethod
+    def may_begin_txn(cls, tk, conn, *, explicit, stale_read):
+        sql = tk.if_not(explicit) \
+            .then_return(None) \
+            .elif_return(stale_read, 'start transaction read only as of timestamp @a') \
+            .else_then(lambda: tk.pick_enum('start transaction', 'begin')) \
+            .end(evaluate_safe=True)
+
+        tk.if_(sql).then(conn.exec_sql, sql).end()
+
+    @classmethod
+    def may_commit_txn(cls, tk, conn, *, explicit):
+        tk.if_(explicit).then(conn.exec_sql, 'commit').end()

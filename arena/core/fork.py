@@ -458,19 +458,17 @@ class IfConditionForker(Forker[T]):
             if self._cur_forker is None:
                 raise ValueError("if_then must be called before elif then")
 
-            self._cur_forker._else_then = then
+            self._cur_forker._else_then = then if isinstance(then, Forker) else SingleValueForker(then)
             self._built = True
             return self
 
         def build(self):
             return self._forker
 
-    def __init__(self, condition, then=None, *, else_then=None):
+    def __init__(self, condition, then=FlatForker([]), *, else_then=FlatForker([])):
         self._cond = condition
-        self._then = then if isinstance(then, Forker) else \
-            (SingleValueForker(then) if then is not None else FlatForker([]))
-        self._else_then = else_then if isinstance(else_then, Forker) else \
-            (SingleValueForker(else_then) if else_then is not None else FlatForker([]))
+        self._then = then if isinstance(then, Forker) else SingleValueForker(then)
+        self._else_then = else_then if isinstance(else_then, Forker) else SingleValueForker(else_then)
 
     def do_fork(self, context: ForkContext) -> ForkResult[T]:
         def _flat_map(item):

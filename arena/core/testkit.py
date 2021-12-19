@@ -97,7 +97,7 @@ class IfStatement(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def end(self):
+    def end(self, evaluate_safe=False, call_safe=False):
         pass
 
     def then_return(self, ret) -> IfStatement:
@@ -176,11 +176,14 @@ class TestKit(abc.ABC):
     def format(self, msg, *args, **kwargs):
         return self.execute(msg.format, _call_safe=True, *args, **kwargs)
 
-    def execute_or_not(self, flag: bool, func, *args, **kwargs):
-        def _exec():
-            if flag:
-                return func(*args, **kwargs)
-        self.execute(_exec)
+    def if_not(self, cond) -> IfStatement:
+        if isinstance(cond, Forker):
+            not_cond = cond.map_value(lambda v: not v)
+            if isinstance(cond, EvaluateSafeForker):
+                not_cond = EvaluateSafeForker(not_cond)
+        else:
+            not_cond = not cond
+        return self.if_(not_cond)
 
     def __enter__(self):
         g.tk = self
@@ -193,6 +196,12 @@ class TestKit(abc.ABC):
         self._defers = []
         for func, args, kwargs in defers:
             func(*args, **kwargs)
+
+    @classmethod
+    def mark_as_evaluate_safe(cls, v, **kwargs):
+        if isinstance(v, Forker) and not isinstance(v, EvaluateSafeForker):
+            return EvaluateSafeForker(v, **kwargs)
+        return v
 
 
 class BuilderTestKit(TestKit):
@@ -306,11 +315,12 @@ class BuilderIfStatement(IfStatement):
         self._has_else_then = True
         return self
 
-    def end(self):
+    def end(self, evaluate_safe=False, call_safe=False):
         if not self._has_else_then:
             self.else_then(lambda: None)
         self._done_func(self._value_builder.build())
-        return self._return_builder.build()
+        forker = self._return_builder.build()
+        return forker if not evaluate_safe else EvaluateSafeForker(forker, call_safe=call_safe)
 
     def add_value_forker(self, forker):
         self._add_value_forker(forker)
@@ -393,7 +403,7 @@ class ExecuteIfStatement(IfStatement):
             self._ret = func(*args, **kwargs)
         return self
 
-    def end(self):
+    def end(self, evaluate_safe=False, call_safe=False):
         self._has_ret = True
         return self._ret
 

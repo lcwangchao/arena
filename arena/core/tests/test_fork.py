@@ -399,3 +399,15 @@ class TestIfConditionForker(unittest.TestCase):
             .else_then(FlatForker([7, 8, 9])) \
             .build()
         self.assertListEqual(list(forker), [1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+    def test_then_none(self):
+        forker = IfConditionForker.builder() \
+            .if_then(True, None) \
+            .build()
+        self.assertListEqual(list(forker), [None])
+
+        forker = IfConditionForker.builder() \
+            .if_then(False, None) \
+            .else_then(None) \
+            .build()
+        self.assertListEqual(list(forker), [None])

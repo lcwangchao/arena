@@ -18,6 +18,10 @@ class ResultSet:
         ut = self._tk.ut
         ut.assertListEqual(self._rows, rows)
 
+    @property
+    def rows(self):
+        return self._rows
+
     def print(self):
         print(self._rows)
 
@@ -50,6 +54,9 @@ class TidbConnection:
         self._conn_id = conn_id
 
     def exec_sql(self, sql, *, params=(), multi=False, fetch_rs=False, prepared=False):
+        sql = sql.strip()
+        if sql[-1] != ';':
+            sql += ';'
         msg = sql
         if params:
             msg = '{} ({})'.format(sql, ', '.join([str(p) for p in params]))
@@ -100,6 +107,7 @@ class TidbTestKit:
         conn = mysql.connector.connect(host=host, port=port, database=database, user=user, password=password, **kwargs)
         tidb_conn = TidbConnection(self._tk, conn=conn, conn_id=self._last_conn_id)
         self._tk.defer(lambda: tidb_conn.close())
+        conn.autocommit = True
         return tidb_conn
 
     def __getattr__(self, item):
