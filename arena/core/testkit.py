@@ -97,7 +97,7 @@ class IfStatement(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def done(self):
+    def end(self):
         pass
 
     def then_return(self, ret) -> IfStatement:
@@ -306,7 +306,7 @@ class BuilderIfStatement(IfStatement):
         self._has_else_then = True
         return self
 
-    def done(self):
+    def end(self):
         if not self._has_else_then:
             self.else_then(lambda: None)
         self._done_func(self._value_builder.build())
@@ -393,7 +393,7 @@ class ExecuteIfStatement(IfStatement):
             self._ret = func(*args, **kwargs)
         return self
 
-    def done(self):
+    def end(self):
         self._has_ret = True
         return self._ret
 

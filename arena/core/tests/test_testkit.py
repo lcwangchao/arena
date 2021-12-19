@@ -77,7 +77,7 @@ class ForkTestDemo(unittest.TestCase):
             .then(lambda: tk.pick("== 1")) \
             .elif_then(a <= 3, lambda: tk.pick("<= 3")) \
             .elif_then(a <= 4, lambda: tk.pick("<= 4")) \
-            .done()
+            .end()
 
         @execute
         def _check():
@@ -103,7 +103,7 @@ class ForkTestDemo(unittest.TestCase):
             .elif_then(a <= 3, lambda: tk.pick("<= 3")) \
             .elif_then(a <= 4, lambda: tk.pick("<= 4")) \
             .else_then(lambda: tk.pick("else")) \
-            .done()
+            .end()
 
         @execute
         def _check():
@@ -129,14 +129,14 @@ class ForkTestDemo(unittest.TestCase):
             .elif_then(a <= 3, lambda: tk.pick("<= 3")) \
             .elif_then(a <= 4, lambda: tk.pick("<= 4")) \
             .else_then(lambda: tk.pick("else")) \
-            .done()
+            .end()
 
         tk.if_(a == 1) \
             .then(self.assertEqual, b, "== 1") \
             .elif_then(a == 3, self.assertEqual, b, "<= 3") \
             .elif_then(a == 4, self.assertEqual, b, "<= 4") \
             .elif_then(a == 5, self.assertEqual, b, "else") \
-            .done()
+            .end()
 
     @fork_test
     def test_demo_obj(self):
