@@ -135,7 +135,8 @@ class ForkTestDemo(unittest.TestCase):
             .then(self.assertEqual, b, "== 1") \
             .elif_then(a == 3, self.assertEqual, b, "<= 3") \
             .elif_then(a == 4, self.assertEqual, b, "<= 4") \
-            .elif_then(a == 5, self.assertEqual, b, "else")
+            .elif_then(a == 5, self.assertEqual, b, "else") \
+            .done()
 
     @fork_test
     def test_demo_obj(self):
