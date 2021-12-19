@@ -246,6 +246,13 @@ class BuilderTestKit(TestKit):
         self._sub_stmt_stack.append(stmt)
         return stmt
 
+    def build_values_forker(self, case, func):
+        func(case)
+        if self._sub_stmt_stack:
+            raise ValueError('Some sub statement not finished')
+
+        return ChainForker(self._forkers).reaction().map_value(Values)
+
     @classmethod
     def _value_forker(cls, v, *, key, key_prefix, skip_safe_check):
         if not isinstance(v, Forker):
@@ -474,10 +481,8 @@ class CaseExecutorForker(Forker):
 
     def _case_generator(self, context: ForkContext):
         with BuilderTestKit(self._case) as tk:
-            self._func(self._case)
-            seed = ChainForker(tk.forkers)
             index = 0
-            for item in seed.reaction().do_fork(context).map_value(Values):
+            for item in tk.build_values_forker(self._case, self._func).do_fork(context):
                 index += 1
                 name = f'c_{index}'
                 if tk.name:
