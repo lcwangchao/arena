@@ -121,6 +121,23 @@ class ForkTestDemo(unittest.TestCase):
         _check()
 
     @fork_test
+    def test_if_2(self):
+        tk = testkit()
+        a = tk.pick_enum(1, 2, 3, 4, 5)
+        b = tk.if_(a == 1) \
+            .then(lambda: tk.pick("== 1")) \
+            .elif_then(a <= 3, lambda: tk.pick("<= 3")) \
+            .elif_then(a <= 4, lambda: tk.pick("<= 4")) \
+            .else_then(lambda: tk.pick("else")) \
+            .done()
+
+        tk.if_(a == 1) \
+            .then(self.assertEqual, b, "== 1") \
+            .elif_then(a == 3, self.assertEqual, b, "<= 3") \
+            .elif_then(a == 4, self.assertEqual, b, "<= 4") \
+            .elif_then(a == 5, self.assertEqual, b, "else")
+
+    @fork_test
     def test_demo_obj(self):
         tk = testkit()
         a = tk.pick_enum(DemoObj(1), DemoObj(2))
