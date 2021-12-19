@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import typing
+
 import mysql.connector
 from mysql.connector import MySQLConnection
 from mysql.connector.cursor import MySQLCursorPrepared
@@ -106,7 +108,7 @@ class TidbTestKit:
         return getattr(self._tk, item)
 
 
-def tidb_testkit() -> TidbTestKit:
+def tidb_testkit() -> typing.Union[TestKit, TidbTestKit]:
     tk = testkit()
     tidb_tk = tk.state.get('tidb_tk')
     if tidb_tk is None:

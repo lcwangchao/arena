@@ -367,3 +367,35 @@ class TestOverride(unittest.TestCase):
 
         a = FlatForker([[1, 2, 3], [4, 5, 6]])
         self.assertListEqual(list(a[0]), [1, 4])
+
+
+class TestIfConditionForker(unittest.TestCase):
+    def test_if_condition(self):
+        forker = IfConditionForker.builder()\
+            .if_then(True, FlatForker([1, 2, 3]))\
+            .build()
+        self.assertListEqual(list(forker), [1, 2, 3])
+
+        forker = IfConditionForker.builder() \
+            .if_then(False, FlatForker([1, 2, 3])) \
+            .build()
+        self.assertListEqual(list(forker), [])
+
+        forker = IfConditionForker.builder() \
+            .if_then(False, FlatForker([1, 2, 3])) \
+            .else_then(FlatForker([4, 5, 6])) \
+            .build()
+        self.assertListEqual(list(forker), [4, 5, 6])
+
+        forker = IfConditionForker.builder() \
+            .if_then(FlatForker([True, False]), FlatForker([1, 2, 3])) \
+            .else_then(FlatForker([4, 5, 6])) \
+            .build()
+        self.assertListEqual(list(forker), [1, 2, 3, 4, 5, 6])
+
+        forker = IfConditionForker.builder() \
+            .if_then(FlatForker([True, False]), FlatForker([1, 2, 3])) \
+            .elif_then(FlatForker([True, False]), FlatForker([4, 5, 6]))\
+            .else_then(FlatForker([7, 8, 9])) \
+            .build()
+        self.assertListEqual(list(forker), [1, 2, 3, 4, 5, 6, 7, 8, 9])

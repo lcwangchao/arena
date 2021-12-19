@@ -33,7 +33,7 @@ class ForkTestDemo(unittest.TestCase):
         a = tk.pick(RangeForker(0, 10), skip_safe_check=True)
         b = tk.pick(RangeForker(0, 10), skip_safe_check=True)
         tk.execute(self.check_add_func, a, b)
-        tk.name = tk.format("{} + {}", a, b)
+        tk.set_name(tk.format("{} + {}", a, b))
 
     @fork_test
     def test_add_func2(self):
@@ -68,6 +68,57 @@ class ForkTestDemo(unittest.TestCase):
         b = tk.pick_enum(2, 4, 6)
         self.assertEqual(another_add_func(a, b),  a + b)
         tk.set_name(tk.format("{} + {}", a, b))
+
+    @fork_test
+    def test_if_1(self):
+        tk = testkit()
+        a = tk.pick_enum(1, 2, 3, 4, 5)
+        b = tk.if_(a == 1) \
+            .then(lambda: tk.pick("== 1")) \
+            .elif_then(a <= 3, lambda: tk.pick("<= 3")) \
+            .elif_then(a <= 4, lambda: tk.pick("<= 4")) \
+            .done()
+
+        @execute
+        def _check():
+            if a == 1:
+                self.assertEqual(b, "== 1")
+            if a == 2:
+                self.assertEqual(b, "<= 3")
+            if a == 3:
+                self.assertEqual(b, "<= 3")
+            if a == 4:
+                self.assertEqual(b, "<= 4")
+            if a == 5:
+                self.assertEqual(b, None)
+
+        _check()
+
+    @fork_test
+    def test_if_2(self):
+        tk = testkit()
+        a = tk.pick_enum(1, 2, 3, 4, 5)
+        b = tk.if_(a == 1) \
+            .then(lambda: tk.pick("== 1")) \
+            .elif_then(a <= 3, lambda: tk.pick("<= 3")) \
+            .elif_then(a <= 4, lambda: tk.pick("<= 4")) \
+            .else_then(lambda: tk.pick("else")) \
+            .done()
+
+        @execute
+        def _check():
+            if a == 1:
+                self.assertEqual(b, "== 1")
+            if a == 2:
+                self.assertEqual(b, "<= 3")
+            if a == 3:
+                self.assertEqual(b, "<= 3")
+            if a == 4:
+                self.assertEqual(b, "<= 4")
+            if a == 5:
+                self.assertEqual(b, "else")
+
+        _check()
 
     @fork_test
     def test_demo_obj(self):

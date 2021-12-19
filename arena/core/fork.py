@@ -19,7 +19,8 @@ __all__ = ['ForkContext', 'ForkItem', 'ForkResult', 'Forker', 'TransformForker',
            'DefaultValueForker',
            'ReactionForker',
            'ContextRecordForker',
-           'ChainForker']
+           'ChainForker',
+           'IfConditionForker']
 
 
 class ForkContext:
@@ -412,8 +413,76 @@ class ChainForker(Forker):
 
         return forker.do_fork(context).map_value(_map_to_forker)
 
+    def reaction(self, **kwargs):
+        return ReactionForker(seed=self, **kwargs)
+
     @staticmethod
     def _default_reduce_func(state, value):
         if state is None:
             return value,
         return state + (value,)
+
+
+class IfConditionForker(Forker[T]):
+    class _Builder:
+        def __init__(self):
+            self._forker = None
+            self._cur_forker = None
+            self._built = False
+
+        def if_then(self, cond, then):
+            if self._built:
+                raise ValueError('already built')
+
+            if self._forker is not None:
+                raise ValueError("cannot call if_then twice")
+            self._forker = IfConditionForker(cond, then)
+            self._cur_forker = self._forker
+            return self
+
+        def elif_then(self, cond, then):
+            if self._built:
+                raise ValueError('already built')
+
+            if self._cur_forker is None:
+                raise ValueError("if_then must be called before elif then")
+
+            self._cur_forker._else_then = IfConditionForker(cond, then)
+            self._cur_forker = self._cur_forker._else_then
+            return self
+
+        def else_then(self, then):
+            if self._built:
+                raise ValueError('already built')
+
+            if self._cur_forker is None:
+                raise ValueError("if_then must be called before elif then")
+
+            self._cur_forker._else_then = then
+            self._built = True
+            return self
+
+        def build(self):
+            return self._forker
+
+    def __init__(self, condition, then=None, *, else_then=None):
+        self._cond = condition
+        self._then = then if isinstance(then, Forker) else \
+            (SingleValueForker(then) if then is not None else FlatForker([]))
+        self._else_then = else_then if isinstance(else_then, Forker) else \
+            (SingleValueForker(else_then) if else_then is not None else FlatForker([]))
+
+    def do_fork(self, context: ForkContext) -> ForkResult[T]:
+        def _flat_map(item):
+            cond = item.value
+            forker = self._then if cond else self._else_then
+            return forker.do_fork(item.context)
+
+        if not isinstance(self._cond, Forker):
+            return _flat_map(context.new_item(self._cond))
+
+        return self._cond.do_fork(context).flat_map(_flat_map)
+
+    @classmethod
+    def builder(cls):
+        return cls._Builder()

@@ -1,6 +1,6 @@
 import unittest
 
-from arena.core.testkit import fork_test
+from arena.core.testkit import fork_test, execute
 from arena.tidb.testkit import tidb_testkit, TidbConnection
 
 
