@@ -70,23 +70,24 @@ class TxnTest(unittest.TestCase):
             .else_return('')\
             .end(evaluate_safe=True)
 
-        v1 = tk.if_(stale_read)\
-            .then_return(10)\
-            .elif_return(tk.or_(tk.not_(explicit_txn), tk.and_(read_committed, pessimistic)), 30) \
-            .else_return(20)\
+        rs1 = tk.if_(stale_read)\
+            .then_return([(1, 10)])\
+            .elif_return(tk.or_(tk.not_(explicit_txn), tk.and_(read_committed, pessimistic)), [(1, 30)]) \
+            .else_return([(1, 20)])\
             .end(evaluate_safe=True)
 
         can_update = tk.not_(tk.and_(explicit_txn, stale_read))
-        v2 = tk.if_(tk.and_(explicit_txn, tk.not_(pessimistic)))\
-            .then_return(20)\
-            .else_return(30)\
+        rs2 = tk.if_(tk.and_(explicit_txn, tk.not_(pessimistic)))\
+            .then_return([(1, 20)])\
+            .else_return([(1, 30)])\
             .end()
 
         self.may_begin_txn(tk, conn, explicit=explicit_txn, read_ts=read_ts, pessimistic=pessimistic)
         conn2.exec_sql('update t1 set v=30 where id=1')
-        conn.query(tk.format('select * from t1 {} where id = 1', as_of_in_sql), prepared=prepare).check([(1, v1)])
+        # conn2.exec_sql('alter table t1 add column(v2 int)')
+        conn.query(tk.format('select * from t1 {} where id = 1', as_of_in_sql), prepared=prepare).check(rs1)
         tk.if_(can_update)\
-            .then(lambda: conn.query('select * from t1 where id = 1 for update', prepared=prepare).check([(1, v2)]))\
+            .then(lambda: conn.query('select * from t1 where id = 1 for update', prepared=prepare).check(rs2))\
             .end()
         tk.if_(can_update)\
             .then(conn.exec_sql, 'update t1 set v=40 where id=1')\
