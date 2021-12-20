@@ -28,12 +28,14 @@ class ResultSet:
 
 
 class PreparedStmt:
-    def __init__(self, tk, stmt, cursor):
+    def __init__(self, tk, stmt, cursor, conn_id):
         self._tk = tk
         self._stmt = stmt
         self._cursor: MySQLCursorPrepared = cursor
+        self._conn_id = conn_id
 
     def execute(self, *, params=(), multi=False, fetch_rs=False):
+        self._tk.log_path(f'exe@conn#{self._conn_id}', self._stmt)
         self._cursor.execute(self._stmt, params=params, multi=multi)
         if fetch_rs:
             return ResultSet(self._tk, rows=self._cursor.fetchall())
@@ -41,11 +43,14 @@ class PreparedStmt:
     def query(self, *args, **kwargs):
         return self.execute(*args, **kwargs, fetch_rs=True)
 
+    def close(self):
+        self._cursor.close()
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self._cursor.close()
+        self.close()
 
 
 class TidbConnection:
@@ -79,11 +84,13 @@ class TidbConnection:
     def query(self, *args, **kwargs):
         return self.exec_sql(*args, **kwargs, fetch_rs=True)
 
-    def prepare(self, stmt):
+    def prepare(self, stmt) -> PreparedStmt:
         cursor = self._conn.cursor(prepared=True)
         try:
+            self._tk.log_path(f'pre@conn#{self._conn_id}', stmt)
             cursor.execute(stmt)
-            return PreparedStmt(self._tk, stmt, cursor)
+            cursor.fetchall()
+            return PreparedStmt(self._tk, stmt, cursor, self._conn_id)
         except Exception:
             cursor.close()
             raise

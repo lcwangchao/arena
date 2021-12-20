@@ -128,7 +128,7 @@ class TestKit(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def if_(self, cond) -> IfStatement:
+    def if_(self, cond, *, skip_safe_check=False) -> IfStatement:
         pass
 
     @property
@@ -251,7 +251,7 @@ class BuilderTestKit(TestKit):
 
         return func(*args, **kwargs)
 
-    def if_(self, cond):
+    def if_(self, cond, *, skip_safe_check=False):
         if self._sub_stmt_stack and not self._sub_stmt_stack[-1].executing:
             raise ValueError('The previous stmt is not terminated')
 
@@ -259,7 +259,7 @@ class BuilderTestKit(TestKit):
             self._forkers.append(forker)
             self._sub_stmt_stack = self._sub_stmt_stack[:-1]
 
-        stmt = BuilderIfStatement(self, cond, _done_func)
+        stmt = BuilderIfStatement(self, cond, _done_func, skip_safe_check=skip_safe_check)
         self._sub_stmt_stack.append(stmt)
         return stmt
 
@@ -287,8 +287,8 @@ class BuilderTestKit(TestKit):
 
 
 class BuilderIfStatement(IfStatement):
-    def __init__(self, tk: BuilderTestKit, cond, done_func):
-        if isinstance(cond, Forker) and not isinstance(cond, EvaluateSafeForker):
+    def __init__(self, tk: BuilderTestKit, cond, done_func, *, skip_safe_check=False):
+        if not skip_safe_check and isinstance(cond, Forker) and not isinstance(cond, EvaluateSafeForker):
             raise ValueError('condition forker must be evaluate safe')
 
         self._tk = tk
@@ -374,7 +374,7 @@ class ExecuteTestKit(TestKit):
         finally:
             self._executing = False
 
-    def if_(self, cond):
+    def if_(self, cond, *, skip_safe_check=False):
         return ExecuteIfStatement(cond)
 
 
@@ -456,9 +456,12 @@ class CaseExecutor:
                 for _ in values:
                     raise RuntimeError('should not reach here')
             except AssertionError as e:
-                raise self._handle_error(tk, e)
+                raise self._handle_assertion_error(tk, e)
+            except Exception as e:
+                path_msg = self._fork_path_detail_message(tk.path)
+                raise RuntimeError(str(e) + '\n\n' + path_msg)
 
-    def _handle_error(self, tk, e):
+    def _handle_assertion_error(self, tk, e):
         path_msg = self._fork_path_detail_message(tk.path)
         if e.args[0]:
             parts = e.args[0].split('\n', 1)
