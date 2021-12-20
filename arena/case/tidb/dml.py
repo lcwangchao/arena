@@ -25,7 +25,7 @@ class TxnTest(BaseTxnTest):
         # tidb_read_staleness's behavior is strange, temporary skip it
         sys_var_name = tk.pick_enum('', 'tx_read_ts')
         set_sys_var = tk.if_(sys_var_name == 'tx_read_ts') \
-            .then_return('set tx_read_ts=@a') \
+            .then_return(f'set tx_read_ts={stale_ts}') \
             .elif_return(sys_var_name == 'tidb_read_staleness', 'set tidb_read_staleness=-1') \
             .else_return('') \
             .end()
