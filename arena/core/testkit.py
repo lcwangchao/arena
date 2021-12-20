@@ -83,6 +83,14 @@ def testkit() -> TestKit:
     return g.tk
 
 
+class ReturnFunc:
+    def __init__(self, value):
+        self._value = value
+
+    def __call__(self):
+        return self._value
+
+
 class IfStatement(abc.ABC):
     @abc.abstractmethod
     def then(self, func, *args, **kwargs) -> IfStatement:
@@ -101,13 +109,13 @@ class IfStatement(abc.ABC):
         pass
 
     def then_return(self, ret) -> IfStatement:
-        return self.then(lambda: ret)
+        return self.then(ReturnFunc(ret))
 
     def elif_return(self, cond, ret) -> IfStatement:
-        return self.elif_then(cond, lambda: ret)
+        return self.elif_then(cond, ReturnFunc(ret))
 
     def else_return(self, ret) -> IfStatement:
-        return self.else_then(lambda: ret)
+        return self.else_then(ReturnFunc(ret))
 
 
 class TestKit(abc.ABC):
@@ -288,10 +296,12 @@ class BuilderTestKit(TestKit):
 
 class BuilderIfStatement(IfStatement):
     def __init__(self, tk: BuilderTestKit, cond, done_func, *, skip_safe_check=False):
-        if not skip_safe_check and isinstance(cond, Forker) and not isinstance(cond, EvaluateSafeForker):
+        eval_safe = isinstance(cond, EvaluateSafeForker) or not isinstance(cond, Forker)
+        if not skip_safe_check and not eval_safe:
             raise ValueError('condition forker must be evaluate safe')
 
         self._tk = tk
+        self._eval_safe = eval_safe
         self._if_cond = cond
         self._done_func = done_func
 
@@ -302,6 +312,7 @@ class BuilderIfStatement(IfStatement):
         self._has_else_then = False
 
     def then(self, func, *args, **kwargs):
+        self._update_evaluate_safe(func)
         ret, v = self._get_then(func, *args, **kwargs)
         self._return_builder.if_then(self._if_cond, ret)
         self._value_builder.if_then(self._if_cond, v)
@@ -311,12 +322,14 @@ class BuilderIfStatement(IfStatement):
         if not isinstance(cond, EvaluateSafeForker):
             raise ValueError('condition forker must be evaluate safe')
 
+        self._update_evaluate_safe(func)
         ret, v = self._get_then(func, *args, **kwargs)
         self._return_builder.elif_then(cond, ret)
         self._value_builder.elif_then(cond, v)
         return self
 
     def else_then(self, func, *args, **kwargs):
+        self._update_evaluate_safe(func)
         ret, v = self._get_then(func, *args, **kwargs)
         self._return_builder.else_then(ret)
         self._value_builder.else_then(v)
@@ -324,6 +337,7 @@ class BuilderIfStatement(IfStatement):
         return self
 
     def end(self, evaluate_safe=False, call_safe=False):
+        evaluate_safe = self._eval_safe or evaluate_safe
         if not self._has_else_then:
             self.else_then(lambda: None)
         self._done_func(self._value_builder.build())
@@ -336,6 +350,22 @@ class BuilderIfStatement(IfStatement):
     @property
     def executing(self):
         return self._executing
+
+    def _update_evaluate_safe(self, func):
+        if not self._eval_safe:
+            return False
+
+        if isinstance(func, ReturnFunc):
+            return True
+
+        if not isinstance(func, Forker):
+            white_list = [self._tk.pick, self._tk.pick_enum, self._tk.pick_range, self._tk.pick_range]
+            for safe_func in white_list:
+                if safe_func == func:
+                    return True
+
+        self._eval_safe = False
+        return False
 
     def _get_then(self, func, *args, **kwargs):
         value_forkers = []
