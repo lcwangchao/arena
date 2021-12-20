@@ -185,6 +185,17 @@ class TestKit(abc.ABC):
             not_cond = not cond
         return self.if_(not_cond)
 
+    def not_(self, cond):
+        return self.execute(lambda x: not x, cond, _call_safe=isinstance(cond, EvaluateSafeForker))
+
+    def and_(self, a, b):
+        call_safe = isinstance(a, EvaluateSafeForker) and isinstance(b, EvaluateSafeForker)
+        return self.execute(lambda x, y: x and y, a, b, _call_safe=call_safe)
+
+    def or_(self, a, b):
+        call_safe = isinstance(a, EvaluateSafeForker) and isinstance(b, EvaluateSafeForker)
+        return self.execute(lambda x, y: x or y, a, b, _call_safe=call_safe)
+
     def __enter__(self):
         g.tk = self
         return self
@@ -235,9 +246,6 @@ class BuilderTestKit(TestKit):
         )
 
     def execute(self, func, *args, _call_safe=False, **kwargs):
-        if self._sub_stmt_stack and not self._sub_stmt_stack[-1].executing:
-            raise ValueError('The previous stmt is not terminated')
-
         if not isinstance(func, Forker):
             func = EvaluateSafeForker(SingleValueForker(func), call_safe=_call_safe)
 
@@ -359,7 +367,7 @@ class ExecuteTestKit(TestKit):
             raise RuntimeError("pick cannot be nested in execute")
         return next(self._values)
 
-    def execute(self, forker, *args, **kwargs):
+    def execute(self, forker, *args, _call_safe=None, **kwargs):
         self._executing = True
         try:
             return forker(*args, **kwargs)
@@ -419,15 +427,16 @@ class Values(collections.Iterable):
 
 
 class CaseExecutor:
-    def __init__(self, func, *, name, values: typing.Iterable):
-        self._name = name
+    def __init__(self, func, *, name, index, values: typing.Iterable):
+        self._name = f"[{index}]{(' ' + name) if name else ''}"
+        self._index = index
         self._func = func
         self._values = values
 
     def run(self, case: unittest.TestCase, *, debug, **params):
         with case.subTest(self._name, **params):
             if debug:
-                print(f'\n-->  Forked: {self._name}')
+                print(f'\n--> {self._name}')
             try:
                 self._run(case, debug=debug)
                 if debug:
@@ -454,13 +463,12 @@ class CaseExecutor:
         if e.args[0]:
             parts = e.args[0].split('\n', 1)
             detail = parts[1] if len(parts) > 1 else ''
-            e.args = ((parts[0] + '\n\n' + path_msg + detail),) + e.args[1:]
+            e.args = ((parts[0] + '\n\n' + path_msg + '\n' + detail),) + e.args[1:]
         else:
             e.args = ('None\n' + path_msg,)
         return e
 
-    @classmethod
-    def _fork_path_detail_message(cls, path):
+    def _fork_path_detail_message(self, path):
         max_topic_len = 0
         for topic, _ in path:
             if topic and len(topic) > max_topic_len:
@@ -468,7 +476,7 @@ class CaseExecutor:
 
         fmt = '  {:' + str(max_topic_len + 2) + '} {}'
         msgs = [fmt.format('[' + tp + ']', msg) for tp, msg in path]
-        return f'Execute path:\n' + '\n'.join(msgs)
+        return f'{self._name}\n' + '\n'.join(msgs)
 
 
 class CaseExecutorForker(Forker):
@@ -494,14 +502,15 @@ class CaseExecutorForker(Forker):
             index = 0
             for item in tk.build_values_forker(self._case, self._func).do_fork(context):
                 index += 1
-                name = f'c_{index}'
-                if tk.name:
+                name = None
+                if tk.name is not None:
                     values = list(tk.name.do_fork(item.context).collect_values())
                     if values:
                         name = values[0]
                 yield item.context.new_item(CaseExecutor(
                     self._func,
                     name=name,
+                    index=index,
                     values=item.value
                 ))
 

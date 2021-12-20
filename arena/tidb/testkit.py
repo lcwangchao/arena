@@ -15,6 +15,7 @@ class ResultSet:
         self._rows = rows
 
     def check(self, rows):
+        self._tk.log_path('rs.check', f'expected: {rows}')
         ut = self._tk.ut
         ut.assertListEqual(self._rows, rows)
 

@@ -213,6 +213,9 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
     def __call__(self, *args, **kwargs):
         return self.call(self, *args, **kwargs)
 
+    def __bool__(self):
+        raise ValueError('Not supported')
+
     @classmethod
     def _get_record_index(cls):
         global _RECORD_INDEX

@@ -1,7 +1,6 @@
-import time
 import unittest
 
-from arena.core.testkit import fork_test, execute
+from arena.core.testkit import fork_test
 from arena.tidb.testkit import tidb_testkit, TidbConnection
 
 
@@ -33,30 +32,62 @@ class TxnTest(unittest.TestCase):
         explicit_txn = tk.pick_bool()
         prepare = tk.pick_bool()
         stale_read = tk.pick_bool()
-        tk.set_name(tk.format('ExplicateTxn: {}, Prepared: {}, StaleRead: {}', explicit_txn, prepare, stale_read))
+        pessimistic = tk.if_(tk.and_(explicit_txn, tk.not_(stale_read)))\
+            .then(lambda: tk.pick_bool()).else_return(False).end(evaluate_safe=True)
+        read_committed = tk.pick_bool()
+        tk.set_name(tk.format('ExplicateTxn: {}, Pessimistic: {}, Prepared: {}, StaleRead: {}, READ-COMMITTED: {}',
+                              explicit_txn, pessimistic, prepare, stale_read, read_committed))
 
         # prepare data
         conn: TidbConnection = tk.connect(user='root')
+        tk.if_(read_committed).then(conn.exec_sql, "set tx_isolation = 'READ-COMMITTED'").end()
         conn.exec_sql('drop table if exists t1')
         conn.exec_sql('create table t1 (id int primary key, v int)')
         tk.defer(conn.exec_sql, 'drop table if exists t1')
         conn.exec_sql('insert into t1 values(1, 10)')
+        conn.exec_sql('do sleep(0.1)')
         conn.exec_sql('set @a=now(6)')
-        time.sleep(0.1)
+        conn.exec_sql('do sleep(0.1)')
         conn.exec_sql('update t1 set v=20 where id=1')
 
-        # run
-        self.may_begin_txn(tk, conn, explicit=explicit_txn, stale_read=stale_read)
-        v = tk.if_(stale_read and explicit_txn).then_return(10).else_return(20).end()
-        conn.query('select * from t1 where id = 1', prepared=prepare).check([(1, v)])
-        self.may_commit_txn(tk, conn, explicit=explicit_txn)
+        conn2: TidbConnection = tk.connect(user='root')
+
+        read_ts = tk.if_(stale_read)\
+            .then_return('@a')\
+            .else_return('')\
+            .end(evaluate_safe=True)
+
+        as_of_in_sql = tk.if_(tk.and_(stale_read, tk.not_(explicit_txn)))\
+            .then_return('as of timestamp @a')\
+            .else_return('')\
+            .end(evaluate_safe=True)
+
+        v1 = tk.if_(stale_read)\
+            .then_return(10)\
+            .elif_return(tk.or_(tk.not_(explicit_txn), tk.and_(read_committed, pessimistic)), 30) \
+            .else_return(20)\
+            .end(evaluate_safe=True)
+
+        v2 = tk.if_(tk.and_(explicit_txn, tk.not_(pessimistic)))\
+            .then_return(20)\
+            .else_return(30)\
+            .end()
+
+        self.may_begin_txn(tk, conn, explicit=explicit_txn, read_ts=read_ts, pessimistic=pessimistic)
+        conn2.exec_sql('update t1 set v=30 where id=1')
+        conn.query(tk.format('select * from t1 {} where id = 1', as_of_in_sql), prepared=prepare).check([(1, v1)])
+        tk.if_not(tk.and_(explicit_txn, stale_read))\
+            .then(lambda: conn.query('select * from t1 where id = 1 for update', prepared=prepare).check([(1, v2)]))\
+            .end()
+        self.may_rollback_txn(tk, conn, explicit=explicit_txn)
 
     @classmethod
-    def may_begin_txn(cls, tk, conn, *, explicit, stale_read):
+    def may_begin_txn(cls, tk, conn, *, explicit, read_ts, pessimistic):
         sql = tk.if_not(explicit) \
             .then_return(None) \
-            .elif_return(stale_read, 'start transaction read only as of timestamp @a') \
-            .else_then(lambda: tk.pick_enum('start transaction', 'begin')) \
+            .elif_then(read_ts, 'start transaction read only as of timestamp {}'.format, read_ts) \
+            .elif_return(pessimistic, 'begin pessimistic') \
+            .else_return('begin optimistic') \
             .end(evaluate_safe=True)
 
         tk.if_(sql).then(conn.exec_sql, sql).end()
@@ -64,3 +95,7 @@ class TxnTest(unittest.TestCase):
     @classmethod
     def may_commit_txn(cls, tk, conn, *, explicit):
         tk.if_(explicit).then(conn.exec_sql, 'commit').end()
+
+    @classmethod
+    def may_rollback_txn(cls, tk, conn, *, explicit):
+        tk.if_(explicit).then(conn.exec_sql, 'rollback').end()
