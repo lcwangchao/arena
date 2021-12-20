@@ -33,10 +33,18 @@ class TxnTest(unittest.TestCase):
         prepare = tk.pick_bool()
         stale_read = tk.pick_bool()
         pessimistic = tk.if_(tk.and_(explicit_txn, tk.not_(stale_read)))\
-            .then(lambda: tk.pick_bool()).else_return(False).end(evaluate_safe=True)
+            .then(lambda: tk.pick_bool())\
+            .else_return(False)\
+            .end(evaluate_safe=True)
         read_committed = tk.pick_bool()
-        tk.set_name(tk.format('ExplicateTxn: {}, Pessimistic: {}, Prepared: {}, StaleRead: {}, READ-COMMITTED: {}',
-                              explicit_txn, pessimistic, prepare, stale_read, read_committed))
+        rollback = tk.if_(tk.and_(explicit_txn, stale_read)) \
+            .then(lambda: tk.pick_bool()) \
+            .elif_return(tk.and_(explicit_txn, tk.not_(pessimistic)), True) \
+            .else_then(lambda: tk.pick_bool()) \
+            .end(evaluate_safe=True)
+        tk.set_name(tk.format('ExplicateTxn: {}, Pessimistic: {}, Prepared: {}, '
+                              'StaleRead: {}, RC: {}, Rollback: {}',
+                              explicit_txn, pessimistic, prepare, stale_read, read_committed, rollback))
 
         # prepare data
         conn: TidbConnection = tk.connect(user='root')
@@ -68,6 +76,7 @@ class TxnTest(unittest.TestCase):
             .else_return(20)\
             .end(evaluate_safe=True)
 
+        can_update = tk.not_(tk.and_(explicit_txn, stale_read))
         v2 = tk.if_(tk.and_(explicit_txn, tk.not_(pessimistic)))\
             .then_return(20)\
             .else_return(30)\
@@ -76,10 +85,17 @@ class TxnTest(unittest.TestCase):
         self.may_begin_txn(tk, conn, explicit=explicit_txn, read_ts=read_ts, pessimistic=pessimistic)
         conn2.exec_sql('update t1 set v=30 where id=1')
         conn.query(tk.format('select * from t1 {} where id = 1', as_of_in_sql), prepared=prepare).check([(1, v1)])
-        tk.if_not(tk.and_(explicit_txn, stale_read))\
+        tk.if_(can_update)\
             .then(lambda: conn.query('select * from t1 where id = 1 for update', prepared=prepare).check([(1, v2)]))\
             .end()
-        self.may_rollback_txn(tk, conn, explicit=explicit_txn)
+        tk.if_(can_update)\
+            .then(conn.exec_sql, 'update t1 set v=40 where id=1')\
+            .end()
+        self.may_finish_txn(tk, conn, explicit=explicit_txn, rollback=rollback)
+
+        tk.if_(tk.and_(tk.not_(rollback), can_update)) \
+            .then(lambda: conn.query('select * from t1 where id = 1', prepared=prepare).check([(1, 40)])) \
+            .end()
 
     @classmethod
     def may_begin_txn(cls, tk, conn, *, explicit, read_ts, pessimistic):
@@ -93,9 +109,9 @@ class TxnTest(unittest.TestCase):
         tk.if_(sql).then(conn.exec_sql, sql).end()
 
     @classmethod
-    def may_commit_txn(cls, tk, conn, *, explicit):
-        tk.if_(explicit).then(conn.exec_sql, 'commit').end()
-
-    @classmethod
-    def may_rollback_txn(cls, tk, conn, *, explicit):
-        tk.if_(explicit).then(conn.exec_sql, 'rollback').end()
+    def may_finish_txn(cls, tk, conn, *, explicit, rollback):
+        tk.if_not(explicit) \
+            .then(lambda: None) \
+            .elif_then(rollback, conn.exec_sql, 'rollback') \
+            .else_then(conn.exec_sql, 'commit') \
+            .end()
