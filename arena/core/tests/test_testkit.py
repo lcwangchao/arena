@@ -48,7 +48,7 @@ class ForkTestDemo(unittest.TestCase):
         tk = testkit()
         a = tk.pick_enum(1, 3, 5)
         b = tk.pick_enum(2, 4, 6)
-        self.assertEqual(self.add_func(a, b),  a + b)
+        self.assertEqual(self.add_func(a, b), a + b)
         self.check_add_func(a, b)
         tk.set_name(tk.format("{} + {}", a, b))
 
@@ -66,7 +66,7 @@ class ForkTestDemo(unittest.TestCase):
         tk = testkit()
         a = tk.pick_enum(1, 3, 5)
         b = tk.pick_enum(2, 4, 6)
-        self.assertEqual(another_add_func(a, b),  a + b)
+        self.assertEqual(another_add_func(a, b), a + b)
         tk.set_name(tk.format("{} + {}", a, b))
 
     @fork_test
@@ -144,6 +144,44 @@ class ForkTestDemo(unittest.TestCase):
         a = tk.pick_enum(DemoObj(1), DemoObj(2))
         b = tk.pick(a.next_two)
         self.assertIn(b - a.v, [1, 2])
+
+    @fork_test
+    def test_cond_table_build(self):
+        tk = testkit()
+        left_points = tk.pick(2)
+
+        temp = tk.pick_enum('', ' TEMPORARY', ' GLOBAL TEMPORARY')
+        create_table = tk.format('CREATE{} TABLE (id int primary key)', temp)
+        left_points = tk.if_(temp).then_return(left_points - 1).else_return(left_points).end()
+
+        # auto inc
+        auto_inc = tk.if_(left_points > 0) \
+            .then(tk.pick_enum, ' AUTO_INCREMENT=2', ' AUTO_INCREMENT=3') \
+            .else_return('') \
+            .end()
+        left_points = tk.if_(auto_inc).then_return(left_points - 1).else_return(left_points).end()
+        create_table = create_table + auto_inc
+
+        # placement
+        placement = tk.if_(tk.and_(left_points > 0, temp == '')) \
+            .then(tk.pick_enum, '', ' PLACEMENT POLICY p1', ' PRIMARY_REGION="bj" REGIONS="bj"') \
+            .else_return('') \
+            .end()
+        left_points = tk.if_(placement).then_return(left_points - 1).else_return(left_points).end()
+        create_table = create_table + placement
+
+        # comment
+        comment = tk.if_(left_points > 0) \
+            .then(tk.pick_enum, '', ' COMMENT="comment 1"', ' COMMENT="comment 2"') \
+            .else_return('') \
+            .end()
+        tk.if_(comment).then_return(left_points - 1).else_return(left_points).end()
+        create_table = create_table + comment
+
+        create_table = tk.if_(temp == ' GLOBAL TEMPORARY') \
+            .then_return(create_table + ' ON COMMIT DELETE ROWS').else_return(create_table).end()
+
+        tk.print(create_table)
 
     @execute
     def check_add_func(self, a, b):
