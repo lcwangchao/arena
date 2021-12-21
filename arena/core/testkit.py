@@ -209,12 +209,14 @@ class TestKit(abc.ABC):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        g.tk = None
-        self._defers.reverse()
-        defers = self._defers
-        self._defers = []
-        for func, args, kwargs in defers:
-            func(*args, **kwargs)
+        try:
+            self._defers.reverse()
+            defers = self._defers
+            self._defers = []
+            for func, args, kwargs in defers:
+                func(*args, **kwargs)
+        finally:
+            g.tk = None
 
     @classmethod
     def mark_as_evaluate_safe(cls, v, **kwargs):
@@ -485,6 +487,7 @@ class CaseExecutor:
                 self._func(case)
                 for _ in values:
                     raise RuntimeError('should not reach here')
+                tk.log_path('OK', 'test ok, do some clear works later ...')
             except AssertionError as e:
                 raise self._handle_assertion_error(tk, e)
             except Exception as e:

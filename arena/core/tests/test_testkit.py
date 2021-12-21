@@ -151,8 +151,9 @@ class ForkTestDemo(unittest.TestCase):
         left_points = tk.pick(2)
 
         temp = tk.pick_enum('', ' TEMPORARY', ' GLOBAL TEMPORARY')
-        create_table = tk.format('CREATE{} TABLE (id int primary key)', temp)
         left_points = tk.if_(temp).then_return(left_points - 1).else_return(left_points).end()
+
+        create_table = tk.format('CREATE{} TABLE (id int primary key)', temp)
 
         # auto inc
         auto_inc = tk.if_(left_points > 0) \
