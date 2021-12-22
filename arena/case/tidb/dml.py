@@ -19,9 +19,9 @@ class TxnTest(BaseTxnTest):
 
         stale_ts = '@a'
         prepare = tk.pick_bool()
-        # stale read in read committed has some bug, temporary skip it
-        read_committed = tk.pick(False)
         autocommit = tk.pick_bool()
+        # stale read + read committed + autocommit = 0 has bug. so skip it
+        read_committed = tk.if_(autocommit).then(tk.pick_bool).else_return(False).end()
         # tidb_read_staleness's behavior is strange, temporary skip it
         sys_var_name = tk.pick_enum('', 'tx_read_ts')
         set_sys_var = tk.if_(sys_var_name == 'tx_read_ts') \
@@ -47,12 +47,11 @@ class TxnTest(BaseTxnTest):
                               'prepare: {}, rc: {}, autocommit: {}',
                               set_sys_var, start_txn, end_txn, prepare, read_committed, autocommit))
 
-        # prepare data
-        conn: TidbConnection = tk.connect(user='root', port=4000)
+        # provision data
+        conn: TidbConnection = tk.connect(user='root', port=4001)
+        conn2: TidbConnection = tk.connect(user='root', port=4001)
+
         tk.if_(read_committed).then(conn.exec_sql, "set tx_isolation = 'READ-COMMITTED'").end()
-
-        conn2: TidbConnection = tk.connect(user='root', port=4000)
-
         conn.exec_sql('set autocommit=1')
         conn.exec_sql('drop table if exists t1')
         conn.exec_sql('create table t1 (id int primary key, v int)')
@@ -82,7 +81,8 @@ class TxnTest(BaseTxnTest):
             .else_return(f'select * from t1 as of timestamp {stale_ts} where id=?') \
             .end()
         prepared_stmt = conn.prepare(sql)
-        conn.exec_sql("set @txn_read_ts=''")
+        # sys var should be consumed by prepare
+        conn.query('select * from t1 where id=1').check([(1, 20, None)])
         prepared_stmt.query(params=(1,)).check([(1, 10)])
 
         def _assert_fail_for_sys_var():

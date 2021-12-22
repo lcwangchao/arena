@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import itertools
-
-import collections
 import functools
 import inspect
 import threading
 import unittest
 
 import abc
+import collections
+import itertools
 import typing
 
 from arena.core.fork import *
@@ -24,6 +23,7 @@ def decorate_evaluate_safe_forker(cls):
         def _func(self, *args, **kwargs):
             op_func = getattr(self._forker, name)
             return cls(op_func(*args, **kwargs))
+
         _func.__name__ = name
         return _func
 
@@ -164,6 +164,7 @@ class TestKit(abc.ABC):
             if self._debug:
                 print('    [{}] {}'.format(topic, msg))
             self._path.append((topic, msg))
+
         self.execute(_func)
 
     def defer(self, func, *args, **kwargs):
@@ -361,7 +362,8 @@ class BuilderIfStatement(IfStatement):
             return True
 
         if not isinstance(func, Forker):
-            white_list = [self._tk.pick, self._tk.pick_enum, self._tk.pick_range, self._tk.pick_range]
+            white_list = [self._tk.pick, self._tk.pick_bool, self._tk.pick_enum, self._tk.pick_range,
+                          self._tk.pick_range]
             for safe_func in white_list:
                 if safe_func == func:
                     return True
