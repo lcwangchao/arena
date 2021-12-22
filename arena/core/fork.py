@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import threading
 from collections import Iterator, Iterable
 from dataclasses import dataclass
@@ -20,7 +21,8 @@ __all__ = ['ForkContext', 'ForkItem', 'ForkResult', 'Forker', 'TransformForker',
            'ReactionForker',
            'ContextRecordForker',
            'ChainForker',
-           'IfConditionForker']
+           'IfConditionForker',
+           'GeneratorForker']
 
 
 class ForkContext:
@@ -144,6 +146,7 @@ def decorate_forker(cls):
     def _op_func(name):
         def _func(self, *args, **kwargs):
             return self.map_value(lambda v: getattr(v, name))(*args, **kwargs)
+
         _func.__name__ = name
         return _func
 
@@ -205,6 +208,7 @@ class Forker(abc.ABC, Generic[T], Iterable[T]):
                 raise ValueError(f'{key} already record')
 
             return item.context.set_var(key, item.value).new_item(item.value)
+
         return key, self.map(_record)
 
     def __getattr__(self, name):
@@ -269,7 +273,7 @@ class ContainerForker(Forker):
         seed = ChainForker([v if isinstance(v, Forker) else SingleValueForker(v) for v in obj])
         return DefaultValueForker(ReactionForker(seed), default=cls._NONE) \
             .foreach(_check) \
-            .map_value(lambda v: tuple(v) if is_tuple else list(v))\
+            .map_value(lambda v: tuple(v) if is_tuple else list(v)) \
             .do_fork(context)
 
 
@@ -487,3 +491,78 @@ class IfConditionForker(Forker[T]):
     @classmethod
     def builder(cls):
         return cls._Builder()
+
+
+class GeneratorForker(Forker):
+    class _State(Forker):
+        def __init__(self, func):
+            self._func = func
+            self._values = []
+
+            self._generator = None
+            self._next_value_forker = None
+
+        def do_fork(self, context: ForkContext) -> ForkResult:
+            return ForkResult(self._do_fork(context))
+
+        def _do_fork(self, context: ForkContext):
+            value_forker: Forker = self._next_value_forker
+            if not self._generator:
+                try:
+                    value_forker: Forker = self._replay()
+                except StopIteration as e:
+                    yield context.new_item(e.value)
+                    return
+
+            values = self._values.copy()
+            for i, item in enumerate(value_forker.do_fork(context)):
+                if i == 0:
+                    self._values.append(item.value)
+                    try:
+                        self._next_value_forker = self._generator.send(item.value)
+                        next_value = self
+                    except StopIteration as e:
+                        next_value = e.value
+                else:
+                    next_value = self.__class__(self._func)
+                    next_value._values.extend(values)
+                    next_value._values.append(item.value)
+
+                yield item.context.new_item(next_value)
+
+        def _replay(self):
+            self._generator = self._func()
+            next_forker = next(self._generator)
+            for v in self._values:
+                next_forker = self._generator.send(v)
+            return next_forker
+
+    def __init__(self, func, *, args=None, kwargs=None):
+        self._func = func
+        self._args = args
+        self._kwargs = kwargs
+
+    def do_fork(self, context: ForkContext) -> ForkResult:
+        state = self._State(self._create_generator_func())
+        return ReactionForker(state).do_fork(context)
+
+    def _create_generator_func(self):
+        def _func():
+            forked_func = self._func if not isinstance(self._func, Forker) else (yield self._func)
+            if isinstance(self._args, Forker):
+                forked_args = yield self._args
+            else:
+                forked_args = self._args or []
+
+            if isinstance(self._kwargs, Forker):
+                forked_kwargs = yield ContainerForker(self._kwargs)
+            else:
+                forked_kwargs = self._kwargs or {}
+
+            result = forked_func(*forked_args, **forked_kwargs)
+            if inspect.isgenerator(result):
+                result = yield from result
+
+            return result
+
+        return _func

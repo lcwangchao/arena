@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import typing
-
 import mysql.connector
+import typing
 from mysql.connector import MySQLConnection
 from mysql.connector.cursor import MySQLCursorPrepared
 
-from arena.core.testkit import TestKit, testkit, execute
+from arena.core.testkit import TestKit, testkit, fork_test
+
+__all__ = ['tidb_testkit', 'ResultSet', 'TidbConnection', 'PreparedStmt', 'fork_test']
 
 
 class ResultSet:
@@ -105,7 +106,6 @@ class TidbTestKit:
         self._tk = tk
         self._last_conn_id = 0
 
-    @execute
     def connect(self, *, host='localhost', port=4000, database='test',
                 user=None, password=None, **kwargs) -> TidbConnection:
         self._last_conn_id += 1

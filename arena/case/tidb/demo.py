@@ -1,7 +1,6 @@
 import unittest
 
-from arena.core.testkit import fork_test
-from arena.tidb.testkit import tidb_testkit, TidbConnection
+from arena.tidb.testkit import *
 
 
 class TestTiDB(unittest.TestCase):
@@ -13,6 +12,6 @@ class TestTiDB(unittest.TestCase):
         conn.exec_sql('create table t (id int)')
         tk.defer(conn.exec_sql, 'drop table if exists t')
 
-        v = tk.pick_range(0, 2)
-        conn.exec_sql(tk.format('insert into t values({})', v))
+        v = yield tk.pick_range(0, 2)
+        conn.exec_sql(f'insert into t values({v})')
         conn.query('select * from t').check([(v,)])

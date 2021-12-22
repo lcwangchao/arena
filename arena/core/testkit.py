@@ -1,147 +1,28 @@
 from __future__ import annotations
 
 import functools
-import inspect
 import threading
 import unittest
 
-import abc
-import collections
-import itertools
-import typing
-
 from arena.core.fork import *
-from arena.core.reflect import BUILTIN_OPS
 
-__all__ = ['testkit', 'fork_test', 'execute', 'TestKit']
+__all__ = ['testkit', 'fork_test', 'TestKit']
 
 g = threading.local()
-
-
-def decorate_evaluate_safe_forker(cls):
-    def _op_func(name):
-        def _func(self, *args, **kwargs):
-            op_func = getattr(self._forker, name)
-            return cls(op_func(*args, **kwargs))
-
-        _func.__name__ = name
-        return _func
-
-    for op in BUILTIN_OPS:
-        setattr(cls, op, _op_func(op))
-    return cls
-
-
-@decorate_evaluate_safe_forker
-class EvaluateSafeForker(Forker):
-    def __init__(self, forker: Forker = None, call_safe=False):
-        self._forker = forker
-        self._call_safe = call_safe
-
-    @property
-    def forker(self):
-        return self._forker
-
-    def do_fork(self, *args, **kwargs) -> ForkResult:
-        return self._forker.do_fork(*args, **kwargs)
-
-    def concat(self, forker) -> Forker:
-        if isinstance(forker, EvaluateSafeForker):
-            return EvaluateSafeForker(self._forker.concat(forker._forker))
-        return self._forker.concat(forker)
-
-    def transform_result(self, func) -> Forker:
-        return self._forker.transform_result(func)
-
-    def record(self, *args, **kwargs):
-        key, forker = self._forker.record(*args, **kwargs)
-        return key, EvaluateSafeForker(forker)
-
-    def __getattr__(self, item):
-        return EvaluateSafeForker(self._forker.__getattr__(item))
-
-    def __call__(self, *args, **kwargs):
-        call_safe = self._call_safe
-        args = list(args)
-        for i, forker in enumerate(args):
-            if isinstance(forker, EvaluateSafeForker):
-                args[i] = forker._forker
-            elif call_safe:
-                call_safe = False
-
-        for k, forker in kwargs.items():
-            if isinstance(forker, EvaluateSafeForker):
-                kwargs[k] = forker
-            elif call_safe:
-                call_safe = False
-
-        forker = self.call(self._forker, *args, **kwargs)
-        return EvaluateSafeForker(forker) if call_safe else forker
 
 
 def testkit() -> TestKit:
     return g.tk
 
 
-class ReturnFunc:
-    def __init__(self, value):
-        self._value = value
-
-    def __call__(self):
-        return self._value
-
-
-class IfStatement(abc.ABC):
-    @abc.abstractmethod
-    def then(self, func, *args, **kwargs) -> IfStatement:
-        pass
-
-    @abc.abstractmethod
-    def elif_then(self, cond, func, *args, **kwargs) -> IfStatement:
-        pass
-
-    @abc.abstractmethod
-    def else_then(self, func, *args, **kwargs) -> IfStatement:
-        pass
-
-    @abc.abstractmethod
-    def end(self, evaluate_safe=False, call_safe=False):
-        pass
-
-    def then_return(self, ret) -> IfStatement:
-        return self.then(ReturnFunc(ret))
-
-    def elif_return(self, cond, ret) -> IfStatement:
-        return self.elif_then(cond, ReturnFunc(ret))
-
-    def else_return(self, ret) -> IfStatement:
-        return self.else_then(ReturnFunc(ret))
-
-
-class TestKit(abc.ABC):
-    def __init__(self, ut):
-        self._name = None
-        self._ut: unittest.TestCase = ut
+class TestKit:
+    def __init__(self, name, *, ut):
+        self._name = name
+        self._ut = ut
         self._path = []
         self._defers = []
         self._debug = False
-        self.state = {}
-
-    @abc.abstractmethod
-    def pick(self, v, *, key=None, key_prefix=None, skip_safe_check=False):
-        pass
-
-    @abc.abstractmethod
-    def execute(self, forker, *args, **kwargs):
-        pass
-
-    @abc.abstractmethod
-    def if_(self, cond, *, skip_safe_check=False) -> IfStatement:
-        pass
-
-    @property
-    def ut(self) -> unittest.TestCase:
-        return self._ut
+        self._state = {}
 
     @property
     def path(self):
@@ -151,59 +32,24 @@ class TestKit(abc.ABC):
     def name(self):
         return self._name
 
+    @property
+    def ut(self):
+        return self._ut
+
+    @property
+    def state(self):
+        return self._state
+
     def debug(self, debug=True):
         self._debug = debug
 
-    def set_name(self, name):
-        if isinstance(name, Forker) and not isinstance(name, EvaluateSafeForker):
-            raise ValueError('name forker must be evaluate safe')
-        self._name = name
-
     def log_path(self, topic, msg):
-        def _func():
-            if self._debug:
-                print('    [{}] {}'.format(topic, msg))
-            self._path.append((topic, msg))
-
-        self.execute(_func)
+        if self._debug:
+            print('    [{}] {}'.format(topic, msg))
+        self._path.append((topic, msg))
 
     def defer(self, func, *args, **kwargs):
-        self.execute(lambda: self._defers.append((func, args, kwargs)))
-
-    def pick_range(self, start, end, **kwargs):
-        return self.pick(RangeForker(start, end), **kwargs, skip_safe_check=True)
-
-    def pick_enum(self, *values, **kwargs):
-        return self.pick(FlatForker(values), **kwargs, skip_safe_check=True)
-
-    def pick_bool(self, **kwargs):
-        return self.pick_enum(False, True, **kwargs)
-
-    def print(self, *msg):
-        self.execute(print, *msg)
-
-    def format(self, msg, *args, **kwargs):
-        return self.execute(msg.format, _call_safe=True, *args, **kwargs)
-
-    def if_not(self, cond) -> IfStatement:
-        if isinstance(cond, Forker):
-            not_cond = cond.map_value(lambda v: not v)
-            if isinstance(cond, EvaluateSafeForker):
-                not_cond = EvaluateSafeForker(not_cond)
-        else:
-            not_cond = not cond
-        return self.if_(not_cond)
-
-    def not_(self, cond):
-        return self.execute(lambda x: not x, cond, _call_safe=isinstance(cond, EvaluateSafeForker))
-
-    def and_(self, a, b):
-        call_safe = isinstance(a, EvaluateSafeForker) and isinstance(b, EvaluateSafeForker)
-        return self.execute(lambda x, y: x and y, a, b, _call_safe=call_safe)
-
-    def or_(self, a, b):
-        call_safe = isinstance(a, EvaluateSafeForker) and isinstance(b, EvaluateSafeForker)
-        return self.execute(lambda x, y: x or y, a, b, _call_safe=call_safe)
+        self._defers.append((func, args, kwargs))
 
     def __enter__(self):
         g.tk = self
@@ -220,275 +66,48 @@ class TestKit(abc.ABC):
             g.tk = None
 
     @classmethod
-    def mark_as_evaluate_safe(cls, v, **kwargs):
-        if isinstance(v, Forker) and not isinstance(v, EvaluateSafeForker):
-            return EvaluateSafeForker(v, **kwargs)
+    def pick(cls, v):
         return v
 
-
-class BuilderTestKit(TestKit):
-    def __init__(self, ut):
-        super().__init__(ut)
-        self._forkers = []
-        self._sub_stmt_stack = []
-
-    @property
-    def forkers(self):
-        return self._forkers
-
-    def pick(self, v, *, key=None, key_prefix=None, skip_safe_check=False):
-        if self._sub_stmt_stack and not self._sub_stmt_stack[-1].executing:
-            raise ValueError('The previous stmt is not terminated')
-
-        key_prefix = key_prefix if (key_prefix and not key) else None
-        if not key:
-            key_prefix = 'tk_v_'
-
-        record_key, forker = self._value_forker(v, key=key, key_prefix=key_prefix, skip_safe_check=skip_safe_check)
-
-        if self._sub_stmt_stack:
-            stmt = self._sub_stmt_stack[-1]
-            stmt.add_value_forker(forker)
-        else:
-            self._forkers.append(forker)
-
-        return EvaluateSafeForker(
-            ContextRecordForker(key=record_key)
-        )
-
-    def execute(self, func, *args, _call_safe=False, **kwargs):
-        if not isinstance(func, Forker):
-            func = EvaluateSafeForker(SingleValueForker(func), call_safe=_call_safe)
-
-        return func(*args, **kwargs)
-
-    def if_(self, cond, *, skip_safe_check=False):
-        if self._sub_stmt_stack and not self._sub_stmt_stack[-1].executing:
-            raise ValueError('The previous stmt is not terminated')
-
-        def _done_func(forker):
-            self._forkers.append(forker)
-            self._sub_stmt_stack = self._sub_stmt_stack[:-1]
-
-        stmt = BuilderIfStatement(self, cond, _done_func, skip_safe_check=skip_safe_check)
-        self._sub_stmt_stack.append(stmt)
-        return stmt
-
-    def build_values_forker(self, case, func):
-        func(case)
-        if self._sub_stmt_stack:
-            raise ValueError('Some sub statement not finished')
-
-        return ChainForker(self._forkers).reaction().map_value(Values)
+    @classmethod
+    def pick_range(cls, start, end):
+        return cls.pick(RangeForker(start, end))
 
     @classmethod
-    def _value_forker(cls, v, *, key, key_prefix, skip_safe_check):
-        if not isinstance(v, Forker):
-            return SingleValueForker(v).record(key=key, key_prefix=key_prefix)
+    def pick_enum(cls, *values):
+        return cls.pick(FlatForker(values))
 
-        if not skip_safe_check and not isinstance(v, EvaluateSafeForker):
-            raise ValueError('forker must be evaluate safe')
-
-        def _func(item: ForkItem):
-            if isinstance(item.value, Forker):
-                return item.value.do_fork(item.context)
-            return [item]
-
-        return v.flat_map(_func).record(key=key, key_prefix=key_prefix)
-
-
-class BuilderIfStatement(IfStatement):
-    def __init__(self, tk: BuilderTestKit, cond, done_func, *, skip_safe_check=False):
-        eval_safe = isinstance(cond, EvaluateSafeForker) or not isinstance(cond, Forker)
-        if not skip_safe_check and not eval_safe:
-            raise ValueError('condition forker must be evaluate safe')
-
-        self._tk = tk
-        self._eval_safe = eval_safe
-        self._if_cond = cond
-        self._done_func = done_func
-
-        self._value_builder = IfConditionForker.builder()
-        self._return_builder = IfConditionForker.builder()
-        self._add_value_forker = None
-        self._executing = False
-        self._has_else_then = False
-
-    def then(self, func, *args, **kwargs):
-        self._update_evaluate_safe(func)
-        ret, v = self._get_then(func, *args, **kwargs)
-        self._return_builder.if_then(self._if_cond, ret)
-        self._value_builder.if_then(self._if_cond, v)
-        return self
-
-    def elif_then(self, cond, func, *args, **kwargs):
-        if not isinstance(cond, EvaluateSafeForker):
-            raise ValueError('condition forker must be evaluate safe')
-
-        self._update_evaluate_safe(func)
-        ret, v = self._get_then(func, *args, **kwargs)
-        self._return_builder.elif_then(cond, ret)
-        self._value_builder.elif_then(cond, v)
-        return self
-
-    def else_then(self, func, *args, **kwargs):
-        self._update_evaluate_safe(func)
-        ret, v = self._get_then(func, *args, **kwargs)
-        self._return_builder.else_then(ret)
-        self._value_builder.else_then(v)
-        self._has_else_then = True
-        return self
-
-    def end(self, evaluate_safe=False, call_safe=False):
-        evaluate_safe = self._eval_safe or evaluate_safe
-        if not self._has_else_then:
-            self.else_then(lambda: None)
-        self._done_func(self._value_builder.build())
-        forker = self._return_builder.build()
-        return forker if not evaluate_safe else EvaluateSafeForker(forker, call_safe=call_safe)
-
-    def add_value_forker(self, forker):
-        self._add_value_forker(forker)
-
-    @property
-    def executing(self):
-        return self._executing
-
-    def _update_evaluate_safe(self, func):
-        if not self._eval_safe:
-            return False
-
-        if isinstance(func, ReturnFunc):
-            return True
-
-        if not isinstance(func, Forker):
-            white_list = [self._tk.pick, self._tk.pick_bool, self._tk.pick_enum, self._tk.pick_range,
-                          self._tk.pick_range]
-            for safe_func in white_list:
-                if safe_func == func:
-                    return True
-
-        self._eval_safe = False
-        return False
-
-    def _get_then(self, func, *args, **kwargs):
-        value_forkers = []
-        self._add_value_forker = value_forkers.append
-        self._executing = True
-        try:
-            ret = func(*args, **kwargs)
-            if value_forkers:
-                return ret, ChainForker(value_forkers).reaction().map_value(Values)
-            else:
-                return ret, SingleValueForker(Values())
-        finally:
-            self._add_value_forker = None
-            self._executing = False
-
-
-class ExecuteTestKit(TestKit):
-    def __init__(self, ut, values: typing.Iterator):
-        super().__init__(ut)
-        self._values = values
-        self._executing = False
-
-    @property
-    def executing(self):
-        return self._executing
-
-    def pick(self, *_, **__):
-        if self._executing:
-            raise RuntimeError("pick cannot be nested in execute")
-        return next(self._values)
-
-    def execute(self, forker, *args, _call_safe=None, **kwargs):
-        self._executing = True
-        try:
-            return forker(*args, **kwargs)
-        finally:
-            self._executing = False
-
-    def if_(self, cond, *, skip_safe_check=False):
-        return ExecuteIfStatement(cond)
-
-
-class ExecuteIfStatement(IfStatement):
-    def __init__(self, cond):
-        self._cond = cond
-        self._then_called = False
-        self._ret = None
-        self._has_ret = False
-
-    def then(self, func, *args, **kwargs):
-        if self._then_called:
-            raise ValueError('Cannot call then twice')
-        self._then_called = True
-        if self._cond:
-            self._ret = func(*args, **kwargs)
-            self._has_ret = True
-        return self
-
-    def elif_then(self, cond, func, *args, **kwargs):
-        if not self._then_called:
-            raise ValueError('then must be called before elif_then')
-
-        if not self._has_ret and cond:
-            self._ret = func(*args, **kwargs)
-            self._has_ret = True
-        return self
-
-    def else_then(self, func, *args, **kwargs):
-        if not self._then_called:
-            raise ValueError('then must be called before elif_then')
-
-        if not self._has_ret:
-            self._ret = func(*args, **kwargs)
-        return self
-
-    def end(self, evaluate_safe=False, call_safe=False):
-        self._has_ret = True
-        return self._ret
-
-
-class Values(collections.Iterable):
-    def __init__(self, values=None):
-        self._values = list(itertools.chain(
-            *[list(v) if isinstance(v, Values) else [v] for v in (values or [])]
-        ))
-
-    def __iter__(self):
-        return iter(self._values)
+    @classmethod
+    def pick_bool(cls):
+        return cls.pick_enum(False, True)
 
 
 class CaseExecutor:
-    def __init__(self, func, *, name, index, values: typing.Iterable):
-        self._name = f"[{index}]{(' ' + name) if name else ''}"
-        self._index = index
+    def __init__(self, func, *, ut: unittest.TestCase, index, debug):
         self._func = func
-        self._values = values
+        self._ut = ut
+        self._index = index
+        self._name = f'[{index}]'
+        self._debug = debug
 
-    def run(self, case: unittest.TestCase, *, debug, **params):
-        with case.subTest(self._name, **params):
-            if debug:
+    def run(self):
+        with self._ut.subTest(self._name):
+            if self._debug:
                 print(f'\n--> {self._name}')
             try:
-                self._run(case, debug=debug)
-                if debug:
+                yield from self._run()
+                if self._debug:
                     print('\n    SUCCEED')
             except Exception:
-                if debug:
+                if self._debug:
                     print('\n    FAILED')
                 raise
 
-    def _run(self, case, *, debug):
-        values = iter(self._values)
-        with ExecuteTestKit(case, values) as tk:
+    def _run(self):
+        with TestKit(self._name, ut=self._ut) as tk:
             try:
-                tk.debug(debug)
-                tk.set_name(self._name)
-                self._func(case)
-                for _ in values:
-                    raise RuntimeError('should not reach here')
+                tk.debug(self._debug)
+                yield from self._func(self._ut)
                 tk.log_path('OK', 'test ok, do some clear works later ...')
             except AssertionError as e:
                 raise self._handle_assertion_error(tk, e)
@@ -517,42 +136,6 @@ class CaseExecutor:
         return f'{self._name}\n' + '\n'.join(msgs)
 
 
-class CaseExecutorForker(Forker):
-    class _CaseProxy:
-        def __init__(self, case: unittest.TestCase):
-            self._case = case
-
-        def __getattr__(self, name):
-            value = getattr(self._case, name)
-            if inspect.ismethod(value) and (name.startswith('assert') or name.startswith('fail')):
-                return execute(value)
-            return value
-
-    def __init__(self, case: unittest.TestCase, func):
-        self._case = self._CaseProxy(case)
-        self._func = func
-
-    def do_fork(self, context: ForkContext) -> ForkResult:
-        return ForkResult(self._case_generator(context))
-
-    def _case_generator(self, context: ForkContext):
-        with BuilderTestKit(self._case) as tk:
-            index = 0
-            for item in tk.build_values_forker(self._case, self._func).do_fork(context):
-                index += 1
-                name = None
-                if tk.name is not None:
-                    values = list(tk.name.do_fork(item.context).collect_values())
-                    if values:
-                        name = values[0]
-                yield item.context.new_item(CaseExecutor(
-                    self._func,
-                    name=name,
-                    index=index,
-                    values=item.value
-                ))
-
-
 def fork_test(func=None, *, debug=False):
     def _wrapper(_func):
         @functools.wraps(_func)
@@ -560,25 +143,18 @@ def fork_test(func=None, *, debug=False):
             if debug:
                 print(f'\n*** Start fork test: {_func.__name__} ***')
 
-            for ut in CaseExecutorForker(self, _func):
-                ut.run(self, debug=debug)
+            index = 0
+
+            def _generate():
+                nonlocal index
+                index += 1
+                executor = CaseExecutor(_func, ut=self, debug=debug, index=index)
+                yield from executor.run()
+
+            for _ in GeneratorForker(_generate):
+                pass
 
         return _test_func
-
-    if func:
-        return _wrapper(func)
-
-    return _wrapper
-
-
-def execute(func=None):
-    def _wrapper(_func):
-        @functools.wraps(_func)
-        def _wrap_func(*args, **kwargs):
-            tk = testkit()
-            return tk.execute(_func, *args, **kwargs)
-
-        return _wrap_func
 
     if func:
         return _wrapper(func)

@@ -411,3 +411,83 @@ class TestIfConditionForker(unittest.TestCase):
             .else_then(None) \
             .build()
         self.assertListEqual(list(forker), [None])
+
+
+class TestGeneratorForker(unittest.TestCase):
+    def test_generator(self):
+        def _gen():
+            v1 = yield FlatForker([1, 2, 3, 4])
+            if v1 <= 1:
+                v2 = yield FlatForker([10, 11])
+            elif v1 <= 3:
+                v2 = yield FlatForker([100, 101])
+            else:
+                v2 = yield FlatForker([1000])
+
+            v3 = yield FlatForker([-1, -2])
+            return [v1, v2, v3]
+
+        forker = GeneratorForker(_gen)
+        self.assertListEqual(list(forker), [
+            [1, 10, -1],
+            [1, 10, -2],
+            [1, 11, -1],
+            [1, 11, -2],
+            [2, 100, -1],
+            [2, 100, -2],
+            [2, 101, -1],
+            [2, 101, -2],
+            [3, 100, -1],
+            [3, 100, -2],
+            [3, 101, -1],
+            [3, 101, -2],
+            [4, 1000, -1],
+            [4, 1000, -2],
+        ])
+
+    def test_for(self):
+        def _gen():
+            vs = yield FlatForker([(1, 2), (11, 12)])
+            vs = list(vs)
+            for i in range(2):
+                a = yield FlatForker([1, 2])
+                vs[i] += a
+            return vs
+
+        forker = GeneratorForker(_gen)
+        self.assertListEqual(list(forker), [
+            [2, 3], [2, 4], [3, 3], [3, 4],
+            [12, 13], [12, 14], [13, 13], [13, 14],
+        ])
+
+    def test_for_build_create_table(self):
+        def _gen():
+            left_points = 2
+
+            temp = yield FlatForker(['', ' TEMPORARY', ' GLOBAL TEMPORARY'])
+            create_table = f'CREATE{temp} TABLE (id int primary key)'
+            if temp:
+                left_points -= 1
+
+            all_options = [
+                ('auto_inc', ['', ' AUTO_INCREMENT=2', ' AUTO_INCREMENT=3']),
+                ('placement', ['', ' PLACEMENT POLICY p1', ' PRIMARY_REGION="bj" REGIONS="bj"']),
+                ('comment', ['', ' COMMENT="comment 1"', ' COMMENT="comment 2"'])
+            ]
+
+            for name, options in all_options:
+                if left_points <= 0:
+                    break
+
+                if name == 'placement' and temp:
+                    continue
+
+                opt = yield FlatForker(options)
+                if opt:
+                    left_points -= 1
+                    create_table += opt
+
+            return create_table
+
+        for sql in GeneratorForker(_gen):
+            print(sql)
