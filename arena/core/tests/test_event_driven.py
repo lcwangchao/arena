@@ -97,9 +97,9 @@ class TestEventDriven(unittest.TestCase):
             def distance(self):
                 return self.target - self.pos
 
-            @action(name='move1', cond=dist('>=', 1), args=1)
-            @action(name='move2', cond=dist('>=', 2), args=2)
             @action(name='move3', cond=dist('>=', 3), args=3)
+            @action(name='move2', cond=dist('>=', 2), args=2)
+            @action(name='move1', cond=dist('>=', 1), args=1)
             def move(self, v):
                 self.covers.append((self.pos, v))
                 self.pos += v

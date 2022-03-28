@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from .fork import *
 
-__all__ = ['EventDrivenState', 'cond', 'action']
+__all__ = ['EventDrivenState', 'cond', 'action', 'current_action_index']
 
 
 class _Cond:
@@ -106,14 +106,17 @@ def cond(func=None, *, name=None):
 
 
 @dataclass
-class _Action:
+class Action:
     name: str
     func: typing.Callable
     cond: typing.Callable
     args: typing.Any
 
-    def __call__(self, state):
-        if isinstance(self.args, (list, tuple)):
+    def __call__(self, state: EventDrivenState, *, index):
+        if self.args is None:
+            args = tuple()
+            kwargs = dict()
+        elif isinstance(self.args, (list, tuple)):
             args = self.args
             kwargs = dict()
         elif isinstance(self.args, dict):
@@ -123,7 +126,11 @@ class _Action:
             args = (self.args,)
             kwargs = dict()
 
-        return self.func(state, *args, **kwargs)
+        try:
+            setattr(state, '_current_action_index', index)
+            return self.func(state, *args, **kwargs)
+        finally:
+            delattr(state, '_current_action_index')
 
     @staticmethod
     def get_attached(obj):
@@ -142,7 +149,7 @@ class _Action:
         if name in actions:
             raise ValueError('duplicated name for multi actions in one func')
 
-        actions[name] = _Action(name=name, func=func, cond=cond, args=args)
+        actions[name] = Action(name=name, func=func, cond=cond, args=args)
         return func
 
     @staticmethod
@@ -150,9 +157,30 @@ class _Action:
         return True
 
 
-def action(func=None, *, name=None, cond=None, args=None):
+def current_action_index(state):
+    idx = getattr(state, '_current_action_index', None)
+    if idx is None:
+        raise ValueError('Not in a action call')
+    return idx
+
+
+def action(func=None, *, name=None, cond=None, args=None, generate=None):
     def _wrapper(_func):
-        return _Action.decorate_func(_func, cond=cond, name=name, args=args)
+        if generate:
+            if name or args:
+                raise ValueError('generate is mutually exclusive with other options')
+
+            for info in generate():
+                _func = Action.decorate_func(
+                    _func,
+                    name=info.get('name', None),
+                    cond=info.get('cond', cond),
+                    args=info.get('args', None)
+                )
+
+            return _func
+
+        return Action.decorate_func(_func, cond=cond, name=name, args=args)
 
     if func:
         return _wrapper(func)
@@ -165,14 +193,14 @@ class EventDrivenStateMeta(abc.ABCMeta):
         new_attrs = attrs.copy()
         actions = collections.OrderedDict()
         for name, attr in attrs.items():
-            acts = _Action.get_attached(attr)
+            acts = Action.get_attached(attr)
             if acts:
                 for name, act in acts.items():
                     if name in actions:
                         raise ValueError('duplicated action name: ' + name)
                     actions[name] = act
 
-        mcs.ACTIONS: typing.Dict[_Action] = actions
+        mcs.ACTIONS: typing.Dict[Action] = actions
         return type.__new__(mcs, name, bases, new_attrs)
 
 
@@ -183,35 +211,74 @@ class EventDrivenState(metaclass=EventDrivenStateMeta):
         :return: the signature for the state to dedup
         """
 
-    def _pick(self, actions, dedup):
-        next_actions = [act for act in actions if act.cond(self)]
-        if not next_actions:
-            return None
+    def setup(self):
+        pass
 
-        state_sig = self.signature()
-        next_actions = [act for act in next_actions if (state_sig, act.name) not in dedup]
-        if not next_actions:
-            next_actions = [None]
+    def close(self):
+        pass
 
-        next_action = yield FlatForker(next_actions)
-        return next_action
+    @property
+    def action_records(self) -> typing.List[Action]:
+        return getattr(self, '_action_records', [])
 
     @classmethod
-    def run(cls, args=None, kwargs=None):
-        args = args or tuple()
-        kwargs = kwargs or dict()
-        dedup = set()
+    def run(cls, *args, **kwargs):
+        return StateDriver(cls).run(*args, **kwargs)
 
-        def _run_func():
-            state = cls(*args, **kwargs)
-            while True:
-                next_action = yield from state._pick(cls.ACTIONS.values(), dedup)
-                if next_action is None:
-                    return state
 
-                dedup.add((state.signature(), next_action.name))
-                next_action(state)
+class StateDriver:
+    class _DedupForker(Forker):
+        def __init__(self, driver: StateDriver, state):
+            self._dedup = driver._dedup
+            self._actions = [act for act in driver._actions if act.cond(state)]
+            self._state_sig = state.signature()
 
-        forker = GeneratorForker(_run_func, args=args, kwargs=kwargs)
+        def do_fork(self, context: ForkContext) -> ForkResult[Action]:
+            return context.new_fork_result(self._generator())
+
+        def _generator(self):
+            empty = True
+            for act in self._actions:
+                sig = (self._state_sig, act.name)
+                if sig not in self._dedup:
+                    empty = False
+                    yield act
+
+            if empty:
+                yield None
+
+    def __init__(self, cls):
+        self._dedup = set()
+        self._actions = cls.ACTIONS.values()
+        self._cls = cls
+
+    def run(self, *args, **kwargs):
+        forker = GeneratorForker(self._run, args=args, kwargs=kwargs)
         for finalState in forker:
             yield finalState
+
+    def _pick(self, state):
+        next_action = yield self._DedupForker(self, state)
+        return next_action
+
+    def _run(self, *args, **kwargs):
+        state = self._cls(*args, **kwargs)
+        state.setup()
+        while True:
+            next_action = yield from self._pick(state)
+            if next_action is None:
+                return state
+
+            sig = (state.signature(), next_action.name)
+            self._dedup.add(sig)
+            self._record_action(state, next_action)
+            next_action(state, index=len(state.action_records) - 1)
+
+    @staticmethod
+    def _record_action(state, record):
+        records = getattr(state, '_action_records', None)
+        if not records:
+            records = []
+            setattr(state, '_action_records', records)
+
+        records.append(record)
