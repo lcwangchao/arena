@@ -132,12 +132,12 @@ class Action:
         finally:
             delattr(state, '_current_action_index')
 
-    @staticmethod
-    def get_attached(obj):
+    @classmethod
+    def get_attached(cls, obj):
         return getattr(obj, '_actions', None)
 
-    @staticmethod
-    def decorate_func(func, *, cond=None, name=None, args=None):
+    @classmethod
+    def decorate_func(cls, func, *, cond=None, name=None, args=None):
         if not name:
             name = func.__name__
 
@@ -149,11 +149,14 @@ class Action:
         if name in actions:
             raise ValueError('duplicated name for multi actions in one func')
 
+        if cond is None:
+            cond = cls.always_true_cond
+
         actions[name] = Action(name=name, func=func, cond=cond, args=args)
         return func
 
-    @staticmethod
-    def always_true_cond(*_, **__):
+    @classmethod
+    def always_true_cond(cls, *_, **__):
         return True
 
 
@@ -223,7 +226,7 @@ class EventDrivenState(metaclass=EventDrivenStateMeta):
 
     @classmethod
     def run(cls, *args, **kwargs):
-        return StateDriver(cls).run(*args, **kwargs)
+        yield from StateDriver(cls).run(*args, **kwargs)
 
 
 class StateDriver:
