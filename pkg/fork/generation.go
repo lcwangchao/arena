@@ -27,7 +27,7 @@ func (g *GenerateContext) Pick(from interface{}) (interface{}, error) {
 			return f, nil
 		}))
 	default:
-		return nil, errors.New(fmt.Sprintf("Unsupported type: %t", f))
+		return nil, errors.New(fmt.Sprintf("Unsupported type: %T", f))
 	}
 }
 

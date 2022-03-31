@@ -10,10 +10,12 @@ type FsmState interface {
 	Signature(nextAction string) string
 }
 
+type FsmActionDo func(ctx context.Context, state FsmState) error
+
 type FsmAction struct {
 	name string
 	when Condition
-	do   func(ctx context.Context, state FsmState) error
+	do   FsmActionDo
 }
 
 func (f *FsmAction) Name() string {
@@ -79,7 +81,7 @@ func (f *FsmForker) newGenerationForker() Forker {
 
 			act, ok := action.(*FsmAction)
 			if !ok {
-				return nil, errors.New(fmt.Sprintf("invalid action type: %t", action))
+				return nil, errors.New(fmt.Sprintf("invalid action type: %T", action))
 			}
 
 			path = append(path, act)
@@ -176,9 +178,10 @@ type FsmForkerBuilder struct {
 type WhenBuilder struct {
 	cond    Condition
 	builder *FsmForkerBuilder
+	err     error
 }
 
-func (b *WhenBuilder) Action(name string, do func(ctx context.Context, state FsmState) error) *WhenBuilder {
+func (b *WhenBuilder) Action(name string, do FsmActionDo) *WhenBuilder {
 	forker := b.builder.forker
 	forker.actions = append(forker.actions, &FsmAction{
 		name: name,
@@ -188,7 +191,49 @@ func (b *WhenBuilder) Action(name string, do func(ctx context.Context, state Fsm
 	return b
 }
 
-func (b *WhenBuilder) End() *FsmForkerBuilder {
+func (b *WhenBuilder) ForkAction(forker Forker) (builder *WhenBuilder) {
+	builder = b
+	iter, err := forker.DoFork(context.TODO())
+	if err != nil {
+		b.err = err
+		return
+	}
+
+	for iter.Valid() {
+		v := iter.Value()
+		item, ok := v.([]interface{})
+		if !ok {
+			b.err = errors.New(fmt.Sprintf("invalid value type %T, must be []interface{}", item))
+			return
+		}
+
+		if len(item) != 2 {
+			b.err = errors.New(fmt.Sprintf("invalid value sized %d", len(item)))
+		}
+
+		name, ok := item[0].(string)
+		if !ok {
+			b.err = errors.New(fmt.Sprintf("invalid name type %T", item))
+			return
+		}
+
+		do, ok := item[1].(FsmActionDo)
+		if !ok {
+			b.err = errors.New(fmt.Sprintf("invalid name do %T", item))
+			return
+		}
+
+		b.Action(name, do)
+		b.err = iter.Next()
+		if b.err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+func (b *WhenBuilder) EndWhen() *FsmForkerBuilder {
 	return b.builder
 }
 
@@ -204,8 +249,8 @@ func (b *FsmForkerBuilder) When(cond Condition) *WhenBuilder {
 	return &WhenBuilder{builder: b, cond: cond}
 }
 
-func (b *FsmForkerBuilder) Action(name string, do func(ctx context.Context, state FsmState) error, cond Condition) *FsmForkerBuilder {
-	return b.When(cond).Action(name, do).End()
+func (b *FsmForkerBuilder) Action(name string, do FsmActionDo, cond Condition) *FsmForkerBuilder {
+	return b.When(cond).Action(name, do).EndWhen()
 }
 
 func (b *FsmForkerBuilder) Build() (*FsmForker, error) {
