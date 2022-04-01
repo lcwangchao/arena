@@ -7,7 +7,8 @@ import (
 )
 
 type FsmState interface {
-	Signature(nextAction string) string
+	Signature() string
+	Clone() (FsmState, error)
 }
 
 type FsmActionDo func(ctx context.Context, state FsmState) error
@@ -57,118 +58,70 @@ func (f *FsmForker) Actions() []*FsmAction {
 }
 
 func (f *FsmForker) DoFork(ctx context.Context) (Iterator, error) {
-	return f.newGenerationForker().DoFork(ctx)
+	return NewSimpleForker(f.getIter).DoFork(ctx)
 }
 
-func (f *FsmForker) newGenerationForker() Forker {
-	dedup := make(map[string]struct{})
-	return NewGenerationForker(func(ctx *GenerateContext) (interface{}, error) {
-		state, err := f.initialState()
-		path := make([]*FsmAction, 0)
-		if err != nil {
-			return nil, err
-		}
+func (f *FsmForker) getIter(ctx context.Context) (Iterator, error) {
+	initialState, err := f.initialState()
+	if err != nil {
+		return nil, err
+	}
 
-		for {
-			action, err := ctx.pick(NewSimpleForker(f.createActionIterFunc(state, dedup)))
+	results := make([]interface{}, 0)
+	pathMap := map[string][]*FsmAction{initialState.Signature(): nil}
+	currentStates := []FsmState{initialState}
+	for len(currentStates) > 0 {
+		nextStates := make([]FsmState, 0)
+		for _, state := range currentStates {
+			parentPath, ok := pathMap[state.Signature()]
+			if !ok {
+				return nil, errors.New("cannot find exist state")
+			}
+
+			allowedActions, err := f.getAllowedActions(state)
 			if err != nil {
 				return nil, err
 			}
 
-			if action == nil {
-				break
-			}
+			for _, action := range allowedActions {
+				nextState, err := state.Clone()
+				nextStatePath := append(append([]*FsmAction{}, parentPath...), action)
+				if err != nil {
+					return nil, err
+				}
 
-			act, ok := action.(*FsmAction)
-			if !ok {
-				return nil, errors.New(fmt.Sprintf("invalid action type: %T", action))
-			}
+				if err = action.Do(ctx, nextState); err != nil {
+					return nil, err
+				}
 
-			path = append(path, act)
-			if err := act.Do(ctx, state); err != nil {
-				return nil, err
+				if _, ok := pathMap[nextState.Signature()]; ok {
+					results = append(results, &FsmForkResult{final: nextState, path: nextStatePath})
+					continue
+				}
+
+				pathMap[nextState.Signature()] = nextStatePath
+				nextStates = append(nextStates, nextState)
 			}
 		}
-
-		return &FsmForkResult{final: state, path: path}, nil
-	})
-}
-
-func (f *FsmForker) createActionIterFunc(state FsmState, dedup map[string]struct{}) func(ctx context.Context) (Iterator, error) {
-	return func(ctx context.Context) (Iterator, error) {
-		return newFsmActionIterator(state, f.actions, dedup)
+		currentStates = nextStates
 	}
+
+	return NewFixedIterator(results), nil
 }
 
-type fsmActionIterator struct {
-	Iterator
-	value *FsmAction
-	dedup map[string]struct{}
-}
-
-func newFsmActionIterator(state FsmState, actions []*FsmAction, dedup map[string]struct{}) (Iterator, error) {
-	allowedActions := make([]interface{}, 0, len(actions))
-	for _, action := range actions {
+func (f *FsmForker) getAllowedActions(state FsmState) ([]*FsmAction, error) {
+	actions := make([]*FsmAction, 0, len(f.actions))
+	for _, action := range f.actions {
 		ok, err := action.when.Evaluate(state)
 		if err != nil {
 			return nil, err
 		}
 
 		if ok {
-			allowedActions = append(allowedActions, []interface{}{action, state.Signature(action.name)})
+			actions = append(actions, action)
 		}
 	}
-
-	i := &fsmActionIterator{
-		Iterator: NewFixedIterator(allowedActions),
-		dedup:    dedup,
-	}
-
-	if err := i.update(); err != nil {
-		return nil, err
-	}
-
-	if !i.Valid() {
-		return NewFixedIterator([]interface{}{nil}), nil
-	}
-
-	return i, nil
-}
-
-func (i *fsmActionIterator) Next() error {
-	if err := i.Iterator.Next(); err != nil {
-		return err
-	}
-
-	if err := i.update(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (i *fsmActionIterator) Value() interface{} {
-	if !i.Valid() {
-		return errors.New("not valid")
-	}
-	return i.value
-}
-
-func (i *fsmActionIterator) update() error {
-	for i.Valid() {
-		todo := i.Iterator.Value().([]interface{})
-		action, signature := todo[0].(*FsmAction), todo[1].(string)
-		if _, ok := i.dedup[signature]; !ok {
-			i.value = action
-			i.dedup[signature] = struct{}{}
-			break
-		}
-
-		if err := i.Iterator.Next(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return actions, nil
 }
 
 type FsmForkerBuilder struct {

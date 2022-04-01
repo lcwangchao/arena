@@ -29,7 +29,6 @@ func (e *env) tag() string {
 	if e == nil {
 		return ""
 	}
-
 	return strings.Join([]string{
 		fmt.Sprintf("autocommit=%v", e.autocommit),
 		fmt.Sprintf("rc=%v", e.rc),
@@ -71,7 +70,7 @@ func newInitialFsmState() *fsmState {
 	return &fsmState{dbName: "test", tableName: "t_stale"}
 }
 
-func (s *fsmState) Signature(nextAction string) string {
+func (s *fsmState) Signature() string {
 	sb := &strings.Builder{}
 	s.writeSignatureItem(sb, "env", s.env.tag())
 	s.writeSignatureItem(sb, "inTxn", s.inTxn)
@@ -81,8 +80,17 @@ func (s *fsmState) Signature(nextAction string) string {
 	s.writeSignatureItem(sb, "stmtPrepared", s.stmtPrepared)
 	s.writeSignatureItem(sb, "binaryPrepare", s.binaryPrepare)
 	s.writeSignatureItem(sb, "preparedStale", s.preparedStale)
-	s.writeSignatureItem(sb, "action", nextAction)
 	return sb.String()
+}
+
+func (s *fsmState) Clone() (fork.FsmState, error) {
+	if s.online {
+		return nil, errors.New("cannot clone online state")
+	}
+
+	var cloned fsmState
+	cloned = *s
+	return &cloned, nil
 }
 
 func (s *fsmState) writeSignatureItem(sb *strings.Builder, key string, value interface{}) {

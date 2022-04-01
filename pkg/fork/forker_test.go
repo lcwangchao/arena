@@ -48,8 +48,15 @@ type fsmState struct {
 	len int
 }
 
-func (s *fsmState) Signature(nextAction string) string {
-	return fmt.Sprintf("%d -> %s", s.pos, nextAction)
+func (s *fsmState) Signature() string {
+	return fmt.Sprintf("%d", s.pos)
+}
+
+func (s *fsmState) Clone() (FsmState, error) {
+	return &fsmState{
+		pos: s.pos,
+		len: s.len,
+	}, nil
 }
 
 func TestFsmForker(t *testing.T) {
@@ -111,19 +118,14 @@ func checkFsmForker(t *testing.T, builder *FsmForkerBuilder, allStates []FsmStat
 	records := make(map[string]bool)
 	for iter.Valid() {
 		result := iter.Value().(*FsmForkResult)
-		hasNoExist := false
 		state, err := forker.InitialStateFunc()()
 		require.NoError(t, err)
 		for _, r := range result.path {
-			sig := state.Signature(r.Name())
-			if _, ok := records[sig]; !ok {
-				hasNoExist = true
-			}
+			sig := state.Signature() + r.Name()
 			records[sig] = true
 			require.NoError(t, r.Do(context.TODO(), state))
 		}
 		equals(result.GetFinalState(), state)
-		require.True(t, hasNoExist)
 		require.NoError(t, iter.Next())
 	}
 
@@ -133,7 +135,7 @@ func checkFsmForker(t *testing.T, builder *FsmForkerBuilder, allStates []FsmStat
 			ok, err := act.Condition().Evaluate(state)
 			require.NoError(t, err)
 			if ok {
-				sig := state.Signature(act.Name())
+				sig := state.Signature() + act.Name()
 				expectedRecords[sig] = true
 			}
 		}

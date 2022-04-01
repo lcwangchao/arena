@@ -22,10 +22,10 @@ func TestStaleRead(t *testing.T) {
 		require.NoError(t, iter.Next())
 	}
 
-	for idx, c := range cases[0:100] {
+	for idx, c := range cases[len(cases)-10:] {
 		index := idx
 		cas := c
-		t.Run(fmt.Sprintf("%d: %d actions", index, len(cas.actions)), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%d/%d (%d actions)", index, len(cases), len(cas.actions)), func(t *testing.T) {
 			cas.Run(t, index)
 		})
 	}
