@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"testing"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/lcwangchao/arena/pkg/fork"
@@ -55,7 +54,6 @@ func TestStaleRead(t *testing.T) {
 				for offset, cas := range batchCases {
 					runOneCase(cas, start+offset, true)
 				}
-				time.Sleep(time.Second * 10)
 			})
 			batchCases = batchCases[:0]
 		}
