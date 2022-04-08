@@ -556,6 +556,7 @@ func (c *testCase) Run(t *testing.T, index int, dns string) {
 	c.state.tableName = fmt.Sprintf("t_stale_%d", index)
 	c.state.online = true
 	defer func() {
+		require.NoError(t, conn.Close())
 		c.state.clear(context.TODO())
 	}()
 
