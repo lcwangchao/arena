@@ -529,7 +529,7 @@ func NewCase(result *fork.FsmForkResult) *testCase {
 	}
 }
 
-func (c *testCase) Run(t *testing.T, index int) {
+func (c *testCase) Run(t *testing.T, index int, dns string) {
 	var success = false
 	defer func() {
 		if !success {
@@ -543,7 +543,7 @@ func (c *testCase) Run(t *testing.T, index int) {
 		}
 	}()
 
-	db, err := sql.Open("mysql", "root@tcp(127.0.0.1:4001)/test")
+	db, err := sql.Open("mysql", dns)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, db.Close())
